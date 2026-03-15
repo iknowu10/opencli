@@ -1,0 +1,38 @@
+site: hoyts
+name: search
+description: Search HOYTS movies
+domain: www.hoyts.com.au
+strategy: public
+browser: false
+
+args:
+  query:
+    required: true
+    description: Search keyword
+  limit:
+    type: int
+    default: 10
+    description: Number of results
+
+pipeline:
+  - fetch:
+      url: https://I7WSMSQJH0-dsn.algolia.net/1/indexes/prod_HOYTSAU
+      headers:
+        X-Algolia-Application-Id: I7WSMSQJH0
+        X-Algolia-API-Key: d2154c1fa8eae2dd92d8a0f9b20eb1af
+      params:
+        query: ${{ args.query }}
+        filters: "type:Movie"
+        hitsPerPage: ${{ args.limit }}
+        attributesToRetrieve: "title,releaseDate,rating,tags,link"
+
+  - select: hits
+
+  - map:
+      title: ${{ item.title }}
+      rating: ${{ item.rating }}
+      genres: ${{ item.tags.join(', ') }}
+      release: ${{ item.releaseDate.substring(0, 10) }}
+      url: ${{ 'https://www.hoyts.com.au' + item.link }}
+
+columns: [title, rating, genres, release, url]

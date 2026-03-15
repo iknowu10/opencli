@@ -40,10 +40,6 @@ function renderTable(data: any, opts: RenderOptions): void {
     style: { head: [], border: [] },
     wordWrap: true,
     wrapOnWordBoundary: true,
-    colWidths: columns.map((_c, i) => {
-      if (i === 0) return 6;
-      return null as any;
-    }).filter(() => true),
   });
 
   for (const row of rows) {
