@@ -80,6 +80,16 @@ program.command('synthesize').description('Synthesize CLIs from explore').argume
 program.command('generate').description('One-shot: explore → synthesize → register').argument('<url>').option('--goal <text>').option('--site <name>')
   .action(async (url, opts) => { const { generateCliFromUrl, renderGenerateSummary } = await import('./generate.js'); const r = await generateCliFromUrl({ url, BrowserFactory: PlaywrightMCP, builtinClis: BUILTIN_CLIS, userClis: USER_CLIS, goal: opts.goal, site: opts.site }); console.log(renderGenerateSummary(r)); process.exitCode = r.ok ? 0 : 1; });
 
+program.command('from-schema').description('Generate CLI adapters from a GraphQL schema file').argument('<schema>', 'Path to .graphql SDL file').requiredOption('--site <name>', 'Site name (e.g. ignition)').requiredOption('--endpoint <url>', 'GraphQL endpoint URL (e.g. https://go.ignitionapp.com/graphql)').option('--out <dir>', 'Output directory (defaults to src/clis/<site>)').option('--only <names>', 'Comma-separated query names to generate').option('--top <n>', 'Max adapters to generate', '20')
+  .action(async (schemaPath, opts) => {
+    const { fromSchema, renderFromSchemaResult } = await import('./from-schema.js');
+    const srcClis = path.resolve(__dirname, '..', 'src', 'clis');
+    const outDir = opts.out ?? path.join(srcClis, opts.site);
+    const r = fromSchema({ schemaPath: path.resolve(schemaPath), site: opts.site, endpoint: opts.endpoint, outDir, only: opts.only ? opts.only.split(',').map((s: string) => s.trim()) : undefined, top: parseInt(opts.top) });
+    console.log(renderFromSchemaResult(r));
+    process.exitCode = r.ok ? 0 : 1;
+  });
+
 program.command('cascade').description('Strategy cascade: find simplest working strategy').argument('<url>').option('--site <name>')
   .action(async (url, opts) => {
     const { cascadeProbe, renderCascadeResult } = await import('./cascade.js');
