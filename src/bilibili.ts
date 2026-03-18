@@ -56,7 +56,7 @@ export async function wbiSign(
   const mixinKey = getMixinKey(imgKey, subKey);
   const wts = Math.floor(Date.now() / 1000);
   const sorted: Record<string, string> = {};
-  const allParams = { ...params, wts: String(wts) };
+  const allParams: Record<string, any> = { ...params, wts: String(wts) };
   for (const key of Object.keys(allParams).sort()) {
     sorted[key] = String(allParams[key]).replace(/[!'()*]/g, '');
   }
@@ -84,10 +84,10 @@ export async function apiGet(
 }
 
 export async function fetchJson(page: IPage, url: string): Promise<any> {
-  const escapedUrl = url.replace(/"/g, '\\"');
+  const urlJs = JSON.stringify(url);
   return page.evaluate(`
     async () => {
-      const res = await fetch("${escapedUrl}", { credentials: "include" });
+      const res = await fetch(${urlJs}, { credentials: "include" });
       return await res.json();
     }
   `);

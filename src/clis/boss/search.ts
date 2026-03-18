@@ -69,7 +69,7 @@ cli({
   description: 'BOSS直聘搜索职位',
   domain: 'www.zhipin.com',
   strategy: Strategy.COOKIE,
-  forceExtension: true, // BOSS Zhipin detects CDP mode — must use extension bridge
+
   browser: true,
   args: [
     { name: 'query', required: true, help: 'Search keyword (e.g. AI agent, 前端)' },
@@ -81,7 +81,7 @@ cli({
     { name: 'page', type: 'int', default: 1, help: 'Page number' },
     { name: 'limit', type: 'int', default: 15, help: 'Number of results' },
   ],
-  columns: ['name', 'salary', 'company', 'area', 'experience', 'degree', 'skills', 'boss', 'url'],
+  columns: ['name', 'salary', 'company', 'area', 'experience', 'degree', 'skills', 'boss', 'security_id', 'url'],
   func: async (page: IPage | null, kwargs) => {
     if (!page) throw new Error('Browser page required');
 
@@ -191,6 +191,7 @@ cli({
           degree: j.jobDegree,
           skills: (j.skills || []).join(','),
           boss: j.bossName + ' · ' + j.bossTitle,
+          security_id: j.securityId || '',
           url: 'https://www.zhipin.com/job_detail/' + j.encryptJobId + '.html',
         });
         addedInBatch++;

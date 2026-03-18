@@ -45,11 +45,12 @@ async function fetchSingle(
   }
 
   const headersJs = JSON.stringify(renderedHeaders);
-  const escapedUrl = finalUrl.replace(/"/g, '\\"');
+  const urlJs = JSON.stringify(finalUrl);
+  const methodJs = JSON.stringify(method.toUpperCase());
   return page.evaluate(`
     async () => {
-      const resp = await fetch("${escapedUrl}", {
-        method: "${method}", headers: ${headersJs}, credentials: "include"
+      const resp = await fetch(${urlJs}, {
+        method: ${methodJs}, headers: ${headersJs}, credentials: "include"
       });
       return await resp.json();
     }

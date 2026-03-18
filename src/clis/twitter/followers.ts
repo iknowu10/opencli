@@ -1,5 +1,4 @@
 import { cli, Strategy } from '../../registry.js';
-import * as fs from 'fs';
 
 cli({
   site: 'twitter',
@@ -37,8 +36,8 @@ cli({
     await page.goto(`https://x.com/${targetUser}`);
     await page.wait(3);
 
-    // 2. Inject interceptor for Followers GraphQL API (or user_flow.json)
-    await page.installInterceptor('graphql');
+    // 2. Inject interceptor for the followers GraphQL API
+    await page.installInterceptor('Followers');
     
     // 3. Click the followers link inside the profile page
     await page.evaluate(`() => {
@@ -53,24 +52,14 @@ cli({
 
     // 4. Retrieve data from opencli's registered interceptors
     const allRequests = await page.getInterceptedRequests();
+    const requestList = Array.isArray(allRequests) ? allRequests : [];
     
-    // Debug: Force dump all intercepted XHRs that match followers
-    if (!allRequests || allRequests.length === 0) {
-       console.log('No GraphQL requests captured by the interceptor backend.');
+    if (requestList.length === 0) {
        return [];
     }
-
-    console.log('Intercepted keys:', allRequests.map((r: any) => {
-      try {
-        const u = new URL(r.url); return u.pathname;
-      } catch (e) {
-        return r.url;
-      }
-    }));
     
-    const requests = allRequests.filter((r: any) => r.url.includes('Followers'));
+    const requests = requestList.filter((r: any) => r?.url?.includes('Followers'));
     if (!requests || requests.length === 0) {
-       console.log('No specific Followers requests captured. Check keys printed above.');
        return [];
     }
 

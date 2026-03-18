@@ -6,12 +6,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
+import { VOLATILE_PARAMS, SEARCH_PARAMS, LIMIT_PARAMS, PAGINATION_PARAMS } from './constants.js';
 
-/** Volatile params to strip from generated URLs */
-const VOLATILE_PARAMS = new Set(['w_rid', 'wts', 'callback', '_', 'timestamp', 't', 'nonce', 'sign']);
-const SEARCH_PARAM_NAMES = new Set(['q', 'query', 'keyword', 'search', 'wd', 'kw', 'w', 'search_query']);
-const LIMIT_PARAM_NAMES = new Set(['ps', 'page_size', 'limit', 'count', 'per_page', 'size', 'num']);
-const PAGE_PARAM_NAMES = new Set(['pn', 'page', 'page_num', 'offset', 'cursor']);
+/** Renamed aliases for backward compatibility with local references */
+const SEARCH_PARAM_NAMES = SEARCH_PARAMS;
+const LIMIT_PARAM_NAMES = LIMIT_PARAMS;
+const PAGE_PARAM_NAMES = PAGINATION_PARAMS;
 
 export function synthesizeFromExplore(
   target: string,

@@ -15,7 +15,6 @@ cli({
   func: async (page: IPage | null, kwargs: any) => {
     if (!page) throw new Error('Requires browser');
 
-    console.log(`Navigating to tweet: ${kwargs.url}`);
     await page.goto(kwargs.url);
     await page.wait(5); // Wait for tweet to load completely
 

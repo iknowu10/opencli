@@ -3,8 +3,30 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
 
-export function validateClisWithTarget(dirs: string[], target?: string): any {
-  const results: any[] = [];
+/** All recognized pipeline step names */
+const KNOWN_STEP_NAMES = new Set([
+  'navigate', 'click', 'type', 'wait', 'press', 'snapshot', 'scroll',
+  'fetch', 'evaluate',
+  'select', 'map', 'filter', 'sort', 'limit',
+  'intercept', 'tap',
+]);
+
+export interface FileValidationResult {
+  path: string;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ValidationReport {
+  ok: boolean;
+  results: FileValidationResult[];
+  errors: number;
+  warnings: number;
+  files: number;
+}
+
+export function validateClisWithTarget(dirs: string[], target?: string): ValidationReport {
+  const results: FileValidationResult[] = [];
   let errors = 0; let warnings = 0; let files = 0;
   for (const dir of dirs) {
     if (!fs.existsSync(dir)) continue;
@@ -27,7 +49,7 @@ export function validateClisWithTarget(dirs: string[], target?: string): any {
   return { ok: errors === 0, results, errors, warnings, files };
 }
 
-function validateYamlFile(filePath: string): any {
+function validateYamlFile(filePath: string): FileValidationResult {
   const errors: string[] = []; const warnings: string[] = [];
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
@@ -38,11 +60,25 @@ function validateYamlFile(filePath: string): any {
     if (def.pipeline && !Array.isArray(def.pipeline)) errors.push('"pipeline" must be an array');
     if (def.columns && !Array.isArray(def.columns)) errors.push('"columns" must be an array');
     if (def.args && typeof def.args !== 'object') errors.push('"args" must be an object');
+    // Validate pipeline step names (catch typos like 'navaigate')
+    if (Array.isArray(def.pipeline)) {
+      for (let i = 0; i < def.pipeline.length; i++) {
+        const step = def.pipeline[i];
+        if (step && typeof step === 'object') {
+          const stepKeys = Object.keys(step);
+          for (const key of stepKeys) {
+            if (!KNOWN_STEP_NAMES.has(key)) {
+              warnings.push(`Pipeline step ${i}: unknown step name "${key}" (did you mean one of: ${[...KNOWN_STEP_NAMES].join(', ')}?)`);
+            }
+          }
+        }
+      }
+    }
   } catch (e: any) { errors.push(`YAML parse error: ${e.message}`); }
   return { path: filePath, errors, warnings };
 }
 
-export function renderValidationReport(report: any): string {
+export function renderValidationReport(report: ValidationReport): string {
   const lines = [`opencli validate: ${report.ok ? 'PASS' : 'FAIL'}`, `Checked ${report.results.length} CLI(s) in ${report.files} file(s)`, `Errors: ${report.errors}  Warnings: ${report.warnings}`];
   for (const r of report.results) {
     if (r.errors.length > 0 || r.warnings.length > 0) {
@@ -53,3 +89,4 @@ export function renderValidationReport(report: any): string {
   }
   return lines.join('\n');
 }
+

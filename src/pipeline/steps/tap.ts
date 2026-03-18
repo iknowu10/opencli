@@ -11,8 +11,9 @@
 
 import type { IPage } from '../../types.js';
 import { render } from '../template.js';
+import { generateTapInterceptorJs } from '../../interceptor.js';
 
-export async function stepTap(page: IPage, params: any, data: any, args: Record<string, any>): Promise<any> {
+export async function stepTap(page: IPage | null, params: any, data: any, args: Record<string, any>): Promise<any> {
   const cfg = typeof params === 'object' ? params : {};
   const storeName = String(render(cfg.store ?? '', { args, data }));
   const actionName = String(render(cfg.action ?? '', { args, data }));
@@ -38,53 +39,15 @@ export async function stepTap(page: IPage, params: any, data: any, args: Record<
     ? `store[${JSON.stringify(actionName)}](${actionArgsRendered.join(', ')})`
     : `store[${JSON.stringify(actionName)}]()`;
 
+  // Use shared interceptor generator for fetch/XHR patching
+  const tap = generateTapInterceptorJs(JSON.stringify(capturePattern));
+
   const js = `
     async () => {
       // ── 1. Setup capture proxy (fetch + XHR dual interception) ──
-      let captured = null;
-      let captureResolve;
-      const capturePromise = new Promise(r => { captureResolve = r; });
-      const capturePattern = ${JSON.stringify(capturePattern)};
-
-      // Intercept fetch API
-      const origFetch = window.fetch;
-      window.fetch = async function(...fetchArgs) {
-        const resp = await origFetch.apply(this, fetchArgs);
-        try {
-          const url = typeof fetchArgs[0] === 'string' ? fetchArgs[0]
-            : fetchArgs[0] instanceof Request ? fetchArgs[0].url : String(fetchArgs[0]);
-          if (capturePattern && url.includes(capturePattern) && !captured) {
-            try { captured = await resp.clone().json(); captureResolve(); } catch {}
-          }
-        } catch {}
-        return resp;
-      };
-
-      // Intercept XMLHttpRequest
-      const origXhrOpen = XMLHttpRequest.prototype.open;
-      const origXhrSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function(method, url) {
-        this.__tapUrl = String(url);
-        return origXhrOpen.apply(this, arguments);
-      };
-      XMLHttpRequest.prototype.send = function(body) {
-        if (capturePattern && this.__tapUrl?.includes(capturePattern)) {
-          const xhr = this;
-          const origHandler = xhr.onreadystatechange;
-          xhr.onreadystatechange = function() {
-            if (xhr.readyState === 4 && !captured) {
-              try { captured = JSON.parse(xhr.responseText); captureResolve(); } catch {}
-            }
-            if (origHandler) origHandler.apply(this, arguments);
-          };
-          const origOnload = xhr.onload;
-          xhr.onload = function() {
-            if (!captured) { try { captured = JSON.parse(xhr.responseText); captureResolve(); } catch {} }
-            if (origOnload) origOnload.apply(this, arguments);
-          };
-        }
-        return origXhrSend.apply(this, arguments);
-      };
+      ${tap.setupVar}
+      ${tap.fetchPatch}
+      ${tap.xhrPatch}
 
       try {
         // ── 2. Find store ──
@@ -119,21 +82,19 @@ export async function stepTap(page: IPage, params: any, data: any, args: Record<
         await ${actionCall};
 
         // ── 4. Wait for network response ──
-        if (!captured) {
+        if (!${tap.capturedVar}) {
           const timeoutPromise = new Promise(r => setTimeout(r, ${timeout} * 1000));
-          await Promise.race([capturePromise, timeoutPromise]);
+          await Promise.race([${tap.promiseVar}, timeoutPromise]);
         }
       } finally {
         // ── 5. Always restore originals ──
-        window.fetch = origFetch;
-        XMLHttpRequest.prototype.open = origXhrOpen;
-        XMLHttpRequest.prototype.send = origXhrSend;
+        ${tap.restorePatch}
       }
 
-      if (!captured) return { error: 'No matching response captured for pattern: ' + capturePattern };
-      return captured${selectChain} ?? captured;
+      if (!${tap.capturedVar}) return { error: 'No matching response captured for pattern: ' + capturePattern };
+      return ${tap.capturedVar}${selectChain} ?? ${tap.capturedVar};
     }
   `;
 
-  return page.evaluate(js);
+  return page!.evaluate(js);
 }

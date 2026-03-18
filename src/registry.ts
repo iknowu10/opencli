@@ -17,6 +17,7 @@ export interface Arg {
   type?: string;
   default?: any;
   required?: boolean;
+  positional?: boolean;
   help?: string;
   choices?: string[];
 }
@@ -30,33 +31,23 @@ export interface CliCommand {
   browser?: boolean;
   args: Arg[];
   columns?: string[];
-  func?: (page: IPage | null, kwargs: Record<string, any>, debug?: boolean) => Promise<any>;
+  func?: (page: IPage, kwargs: Record<string, any>, debug?: boolean) => Promise<any>;
   pipeline?: any[];
   timeoutSeconds?: number;
   source?: string;
-  /** Internal: lazy-loaded TS module support */
-  _lazy?: boolean;
-  _modulePath?: string;
-  /** Force extension bridge mode (bypass CDP), for anti-bot sites */
-  forceExtension?: boolean;
 }
 
-export interface CliOptions {
+/** Internal extension for lazy-loaded TS modules (not exposed in public API) */
+export interface InternalCliCommand extends CliCommand {
+  _lazy?: boolean;
+  _modulePath?: string;
+}
+export interface CliOptions extends Partial<Omit<CliCommand, 'args' | 'description'>> {
   site: string;
   name: string;
   description?: string;
-  domain?: string;
-  strategy?: Strategy;
-  browser?: boolean;
   args?: Arg[];
-  columns?: string[];
-  func?: (page: IPage | null, kwargs: Record<string, any>, debug?: boolean) => Promise<any>;
-  pipeline?: any[];
-  timeoutSeconds?: number;
-  /** Force extension bridge mode (bypass CDP), for anti-bot sites */
-  forceExtension?: boolean;
 }
-
 const _registry = new Map<string, CliCommand>();
 
 export function cli(opts: CliOptions): CliCommand {
@@ -72,7 +63,6 @@ export function cli(opts: CliOptions): CliCommand {
     func: opts.func,
     pipeline: opts.pipeline,
     timeoutSeconds: opts.timeoutSeconds,
-    forceExtension: opts.forceExtension,
   };
 
   const key = fullName(cmd);

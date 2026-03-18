@@ -1,51 +1,286 @@
-import { describe, expect, it } from 'vitest';
-import { formatBrowserConnectError, getTokenFingerprint } from './browser.js';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { PlaywrightMCP, __test__ } from './browser/index.js';
 
-describe('getTokenFingerprint', () => {
-  it('returns null for empty token', () => {
-    expect(getTokenFingerprint(undefined)).toBeNull();
+afterEach(() => {
+  __test__.resetMcpServerPathCache();
+  __test__.setMcpDiscoveryTestHooks();
+  delete process.env.OPENCLI_MCP_SERVER_PATH;
+});
+
+describe('browser helpers', () => {
+  it('creates JSON-RPC requests with unique ids', () => {
+    const first = __test__.createJsonRpcRequest('tools/call', { name: 'browser_tabs' });
+    const second = __test__.createJsonRpcRequest('tools/call', { name: 'browser_snapshot' });
+
+    expect(second.id).toBe(first.id + 1);
+    expect(first.message).toContain(`"id":${first.id}`);
+    expect(second.message).toContain(`"id":${second.id}`);
   });
 
-  it('returns stable short fingerprint for token', () => {
-    expect(getTokenFingerprint('abc123')).toBe('6ca13d52');
+  it('extracts tab entries from string snapshots', () => {
+    const entries = __test__.extractTabEntries('Tab 0 https://example.com\nTab 1 Chrome Extension');
+
+    expect(entries).toEqual([
+      { index: 0, identity: 'https://example.com' },
+      { index: 1, identity: 'Chrome Extension' },
+    ]);
+  });
+
+  it('extracts tab entries from MCP markdown format', () => {
+    const entries = __test__.extractTabEntries(
+      '- 0: (current) [Playwright MCP extension](chrome-extension://abc/connect.html)\n- 1: [知乎 - 首页](https://www.zhihu.com/)'
+    );
+
+    expect(entries).toEqual([
+      { index: 0, identity: '(current) [Playwright MCP extension](chrome-extension://abc/connect.html)' },
+      { index: 1, identity: '[知乎 - 首页](https://www.zhihu.com/)' },
+    ]);
+  });
+
+  it('closes only tabs that were opened during the session', () => {
+    const tabsToClose = __test__.diffTabIndexes(
+      ['https://example.com', 'Chrome Extension'],
+      [
+        { index: 0, identity: 'https://example.com' },
+        { index: 1, identity: 'Chrome Extension' },
+        { index: 2, identity: 'https://target.example/page' },
+        { index: 3, identity: 'chrome-extension://bridge' },
+      ],
+    );
+
+    expect(tabsToClose).toEqual([3, 2]);
+  });
+
+  it('keeps only the tail of stderr buffers', () => {
+    expect(__test__.appendLimited('12345', '67890', 8)).toBe('34567890');
+  });
+
+  it('builds extension MCP args in local mode (no CI)', () => {
+    const savedCI = process.env.CI;
+    delete process.env.CI;
+    try {
+      expect(__test__.buildMcpArgs({
+        mcpPath: '/tmp/cli.js',
+        executablePath: '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe',
+      })).toEqual([
+        '/tmp/cli.js',
+        '--extension',
+        '--executable-path',
+        '/mnt/c/Program Files/Google/Chrome/Application/chrome.exe',
+      ]);
+
+      expect(__test__.buildMcpArgs({
+        mcpPath: '/tmp/cli.js',
+      })).toEqual([
+        '/tmp/cli.js',
+        '--extension',
+      ]);
+    } finally {
+      if (savedCI !== undefined) {
+        process.env.CI = savedCI;
+      } else {
+        delete process.env.CI;
+      }
+    }
+  });
+
+  it('builds standalone MCP args in CI mode', () => {
+    const savedCI = process.env.CI;
+    process.env.CI = 'true';
+    try {
+      // CI mode: no --extension — browser launches in standalone headed mode
+      expect(__test__.buildMcpArgs({
+        mcpPath: '/tmp/cli.js',
+      })).toEqual([
+        '/tmp/cli.js',
+      ]);
+
+      expect(__test__.buildMcpArgs({
+        mcpPath: '/tmp/cli.js',
+        executablePath: '/usr/bin/chromium',
+      })).toEqual([
+        '/tmp/cli.js',
+        '--executable-path',
+        '/usr/bin/chromium',
+      ]);
+    } finally {
+      if (savedCI !== undefined) {
+        process.env.CI = savedCI;
+      } else {
+        delete process.env.CI;
+      }
+    }
+  });
+
+  it('builds a direct node launch spec when a local MCP path is available', () => {
+    const savedCI = process.env.CI;
+    delete process.env.CI;
+    try {
+      expect(__test__.buildMcpLaunchSpec({
+        mcpPath: '/tmp/cli.js',
+        executablePath: '/usr/bin/google-chrome',
+      })).toEqual({
+        command: 'node',
+        args: ['/tmp/cli.js', '--extension', '--executable-path', '/usr/bin/google-chrome'],
+        usedNpxFallback: false,
+      });
+    } finally {
+      if (savedCI !== undefined) {
+        process.env.CI = savedCI;
+      } else {
+        delete process.env.CI;
+      }
+    }
+  });
+
+  it('falls back to npx bootstrap when no MCP path is available', () => {
+    const savedCI = process.env.CI;
+    delete process.env.CI;
+    try {
+      expect(__test__.buildMcpLaunchSpec({
+        mcpPath: null,
+      })).toEqual({
+        command: 'npx',
+        args: ['-y', '@playwright/mcp@latest', '--extension'],
+        usedNpxFallback: true,
+      });
+    } finally {
+      if (savedCI !== undefined) {
+        process.env.CI = savedCI;
+      } else {
+        delete process.env.CI;
+      }
+    }
+  });
+
+  it('times out slow promises', async () => {
+    await expect(__test__.withTimeoutMs(new Promise(() => {}), 10, 'timeout')).rejects.toThrow('timeout');
+  });
+
+  it('prefers OPENCLI_MCP_SERVER_PATH over discovered locations', () => {
+    process.env.OPENCLI_MCP_SERVER_PATH = '/env/mcp/cli.js';
+    const existsSync = vi.fn((candidate: any) => candidate === '/env/mcp/cli.js');
+    const execSync = vi.fn();
+    __test__.setMcpDiscoveryTestHooks({ existsSync, execSync: execSync as any });
+
+    expect(__test__.findMcpServerPath()).toBe('/env/mcp/cli.js');
+    expect(execSync).not.toHaveBeenCalled();
+    expect(existsSync).toHaveBeenCalledWith('/env/mcp/cli.js');
+  });
+
+  it('discovers global @playwright/mcp from the current Node runtime prefix', () => {
+    const originalExecPath = process.execPath;
+    const runtimeExecPath = '/opt/homebrew/Cellar/node/25.2.1/bin/node';
+    const runtimeGlobalMcp = '/opt/homebrew/Cellar/node/25.2.1/lib/node_modules/@playwright/mcp/cli.js';
+    Object.defineProperty(process, 'execPath', {
+      value: runtimeExecPath,
+      configurable: true,
+    });
+
+    const existsSync = vi.fn((candidate: any) => candidate === runtimeGlobalMcp);
+    const execSync = vi.fn();
+    __test__.setMcpDiscoveryTestHooks({ existsSync, execSync: execSync as any });
+
+    try {
+      expect(__test__.findMcpServerPath()).toBe(runtimeGlobalMcp);
+      expect(execSync).not.toHaveBeenCalled();
+      expect(existsSync).toHaveBeenCalledWith(runtimeGlobalMcp);
+    } finally {
+      Object.defineProperty(process, 'execPath', {
+        value: originalExecPath,
+        configurable: true,
+      });
+    }
+  });
+
+  it('falls back to npm root -g when runtime prefix lookup misses', () => {
+    const originalExecPath = process.execPath;
+    const runtimeExecPath = '/opt/homebrew/Cellar/node/25.2.1/bin/node';
+    const runtimeGlobalMcp = '/opt/homebrew/Cellar/node/25.2.1/lib/node_modules/@playwright/mcp/cli.js';
+    const npmRootGlobal = '/Users/jakevin/.nvm/versions/node/v22.14.0/lib/node_modules';
+    const npmGlobalMcp = '/Users/jakevin/.nvm/versions/node/v22.14.0/lib/node_modules/@playwright/mcp/cli.js';
+    Object.defineProperty(process, 'execPath', {
+      value: runtimeExecPath,
+      configurable: true,
+    });
+
+    const existsSync = vi.fn((candidate: any) => candidate === npmGlobalMcp);
+    const execSync = vi.fn((command: string) => {
+      if (String(command).includes('npm root -g')) return `${npmRootGlobal}\n` as any;
+      throw new Error(`unexpected command: ${String(command)}`);
+    });
+    __test__.setMcpDiscoveryTestHooks({ existsSync, execSync: execSync as any });
+
+    try {
+      expect(__test__.findMcpServerPath()).toBe(npmGlobalMcp);
+      expect(execSync).toHaveBeenCalledOnce();
+      expect(existsSync).toHaveBeenCalledWith(runtimeGlobalMcp);
+      expect(existsSync).toHaveBeenCalledWith(npmGlobalMcp);
+    } finally {
+      Object.defineProperty(process, 'execPath', {
+        value: originalExecPath,
+        configurable: true,
+      });
+    }
+  });
+
+  it('returns null when new global discovery paths are unavailable', () => {
+    const originalExecPath = process.execPath;
+    const runtimeExecPath = '/opt/homebrew/Cellar/node/25.2.1/bin/node';
+    Object.defineProperty(process, 'execPath', {
+      value: runtimeExecPath,
+      configurable: true,
+    });
+
+    const existsSync = vi.fn(() => false);
+    const execSync = vi.fn((command: string) => {
+      if (String(command).includes('npm root -g')) return '/missing/global/node_modules\n' as any;
+      throw new Error(`missing command: ${String(command)}`);
+    });
+    __test__.setMcpDiscoveryTestHooks({ existsSync, execSync: execSync as any });
+
+    try {
+      expect(__test__.findMcpServerPath()).toBeNull();
+    } finally {
+      Object.defineProperty(process, 'execPath', {
+        value: originalExecPath,
+        configurable: true,
+      });
+    }
   });
 });
 
-describe('formatBrowserConnectError', () => {
-  it('explains missing extension token clearly', () => {
-    const err = formatBrowserConnectError({
-      kind: 'missing-token',
-      mode: 'extension',
-      timeout: 30,
-      hasExtensionToken: false,
-    });
+describe('PlaywrightMCP state', () => {
+  it('transitions to closed after close()', async () => {
+    const mcp = new PlaywrightMCP();
 
-    expect(err.message).toContain('PLAYWRIGHT_MCP_EXTENSION_TOKEN is not set');
-    expect(err.message).toContain('manual approval dialog');
+    expect(mcp.state).toBe('idle');
+
+    await mcp.close();
+
+    expect(mcp.state).toBe('closed');
   });
 
-  it('mentions token mismatch as likely cause for extension timeout', () => {
-    const err = formatBrowserConnectError({
-      kind: 'extension-timeout',
-      mode: 'extension',
-      timeout: 30,
-      hasExtensionToken: true,
-      tokenFingerprint: 'deadbeef',
-    });
+  it('rejects connect() after the session has been closed', async () => {
+    const mcp = new PlaywrightMCP();
+    await mcp.close();
 
-    expect(err.message).toContain('does not match the token currently shown by the browser extension');
-    expect(err.message).toContain('deadbeef');
+    await expect(mcp.connect()).rejects.toThrow('Playwright MCP session is closed');
   });
 
-  it('keeps CDP timeout guidance separate', () => {
-    const err = formatBrowserConnectError({
-      kind: 'cdp-timeout',
-      mode: 'cdp',
-      timeout: 30,
-      hasExtensionToken: false,
-    });
+  it('rejects connect() while already connecting', async () => {
+    const mcp = new PlaywrightMCP();
+    (mcp as any)._state = 'connecting';
 
-    expect(err.message).toContain('via CDP');
-    expect(err.message).toContain('chrome://inspect#remote-debugging');
+    await expect(mcp.connect()).rejects.toThrow('Playwright MCP is already connecting');
   });
+
+  it('rejects connect() while closing', async () => {
+    const mcp = new PlaywrightMCP();
+    (mcp as any)._state = 'closing';
+
+    await expect(mcp.connect()).rejects.toThrow('Playwright MCP is closing');
+  });
+
+
 });

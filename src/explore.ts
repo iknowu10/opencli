@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DEFAULT_BROWSER_EXPLORE_TIMEOUT, browserSession, runWithTimeout } from './runtime.js';
+import { VOLATILE_PARAMS, SEARCH_PARAMS, PAGINATION_PARAMS, LIMIT_PARAMS, FIELD_ROLES } from './constants.js';
 
 // ── Site name detection ────────────────────────────────────────────────────
 
@@ -43,21 +44,7 @@ export function slugify(value: string): string {
 
 // ── Field & capability inference ───────────────────────────────────────────
 
-const FIELD_ROLES: Record<string, string[]> = {
-  title:    ['title', 'name', 'text', 'content', 'desc', 'description', 'headline', 'subject'],
-  url:      ['url', 'uri', 'link', 'href', 'permalink', 'jump_url', 'web_url', 'share_url'],
-  author:   ['author', 'username', 'user_name', 'nickname', 'nick', 'owner', 'creator', 'up_name', 'uname'],
-  score:    ['score', 'hot', 'heat', 'likes', 'like_count', 'view_count', 'views', 'play', 'favorite_count', 'reply_count'],
-  time:     ['time', 'created_at', 'publish_time', 'pub_time', 'date', 'ctime', 'mtime', 'pubdate', 'created'],
-  id:       ['id', 'aid', 'bvid', 'mid', 'uid', 'oid', 'note_id', 'item_id'],
-  cover:    ['cover', 'pic', 'image', 'thumbnail', 'poster', 'avatar'],
-  category: ['category', 'tag', 'type', 'tname', 'channel', 'section'],
-};
-
-const SEARCH_PARAMS = new Set(['q', 'query', 'keyword', 'search', 'wd', 'kw', 'search_query', 'w']);
-const PAGINATION_PARAMS = new Set(['page', 'pn', 'offset', 'cursor', 'next', 'page_num']);
-const LIMIT_PARAMS = new Set(['limit', 'count', 'size', 'per_page', 'page_size', 'ps', 'num']);
-const VOLATILE_PARAMS = new Set(['w_rid', 'wts', '_', 'callback', 'timestamp', 't', 'nonce', 'sign']);
+// (constants now imported from constants.ts)
 
 // ── Network analysis ───────────────────────────────────────────────────────
 

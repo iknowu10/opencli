@@ -1,5 +1,4 @@
 import { cli, Strategy } from '../../registry.js';
-import * as fs from 'fs';
 
 cli({
   site: 'twitter',
@@ -13,12 +12,15 @@ cli({
   ],
   columns: ['id', 'action', 'author', 'text', 'url'],
   func: async (page, kwargs) => {
+    // Install the interceptor before loading the notifications page so we
+    // capture the initial timeline request triggered during page load.
+    await page.goto('https://x.com');
+    await page.wait(2);
+    await page.installInterceptor('NotificationsTimeline');
+
     // 1. Navigate to notifications
     await page.goto('https://x.com/notifications');
     await page.wait(5);
-
-    // 2. Inject interceptor
-    await page.installInterceptor('NotificationsTimeline');
 
     // 3. Trigger API by scrolling (if we need to load more)
     await page.autoScroll({ times: 2, delayMs: 2000 });
@@ -28,9 +30,10 @@ cli({
     if (!requests || requests.length === 0) return [];
 
     let results: any[] = [];
+    const seen = new Set<string>();
     for (const req of requests) {
       try {
-        let instructions = [];
+        let instructions: any[] = [];
         if (req.data?.data?.viewer?.timeline_response?.timeline?.instructions) {
              instructions = req.data.data.viewer.timeline_response.timeline.instructions;
         } else if (req.data?.data?.viewer_v2?.user_results?.result?.notification_timeline?.timeline?.instructions) {
@@ -75,14 +78,16 @@ cli({
             if (item.__typename === 'TimelineNotification') {
                  // Greet likes, retweet, mentions
                  text = item.rich_message?.text || item.message?.text || '';
-                 author = item.template?.from_users?.[0]?.user_results?.result?.core?.screen_name || 'unknown';
+                 const fromUser = item.template?.from_users?.[0]?.user_results?.result;
+                 author = fromUser?.legacy?.screen_name || fromUser?.core?.screen_name || 'unknown';
                  urlStr = item.notification_url?.url || '';
                  actionText = item.notification_icon || 'Activity';
                  
                  // If there's an attached tweet
                  const targetTweet = item.template?.target_objects?.[0]?.tweet_results?.result;
                  if (targetTweet) {
-                    text += ' | ' + (targetTweet.legacy?.full_text || '');
+                    const targetText = targetTweet.note_tweet?.note_tweet_results?.result?.text || targetTweet.legacy?.full_text || '';
+                    text += text && targetText ? ' | ' + targetText : targetText;
                     if (!urlStr) {
                          urlStr = `https://x.com/i/status/${targetTweet.rest_id}`;
                     }
@@ -91,18 +96,22 @@ cli({
                  // Direct mention/reply
                  const tweet = item.tweet_result?.result;
                  author = tweet?.core?.user_results?.result?.legacy?.screen_name || 'unknown';
-                 text = tweet?.legacy?.full_text || item.message?.text || '';
+                 text = tweet?.note_tweet?.note_tweet_results?.result?.text || tweet?.legacy?.full_text || item.message?.text || '';
                  actionText = 'Mention/Reply';
                  urlStr = `https://x.com/i/status/${tweet?.rest_id}`;
             } else if (item.__typename === 'Tweet') {
                  author = item.core?.user_results?.result?.legacy?.screen_name || 'unknown';
-                 text = item.legacy?.full_text || '';
+                 text = item.note_tweet?.note_tweet_results?.result?.text || item.legacy?.full_text || '';
                  actionText = 'Mention';
                  urlStr = `https://x.com/i/status/${item.rest_id}`;
             }
 
+            const id = item.id || item.rest_id || entryId;
+            if (seen.has(id)) return;
+            seen.add(id);
+
             results.push({
-              id: item.id || item.rest_id || entryId,
+              id,
               action: actionText,
               author: author,
               text: text,

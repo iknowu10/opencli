@@ -1,7 +1,7 @@
 # OpenCLI
 
 > **Make any website your CLI.**  
-> Zero risk · Reuse Chrome login · AI-powered discovery
+> Zero risk · Reuse Chrome login · AI-powered discovery · 80+ commands · 19 sites
 
 [中文文档](./README.zh-CN.md)
 
@@ -9,7 +9,7 @@
 [![Node.js Version](https://img.shields.io/node/v/@jackwener/opencli?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/npm/l/@jackwener/opencli?style=flat-square)](./LICENSE)
 
-A CLI tool that turns **any website** into a command-line interface. **57 commands** across **17 sites** — bilibili, zhihu, xiaohongshu, twitter, reddit, xueqiu, github, v2ex, hackernews, bbc, weibo, boss, yahoo-finance, reuters, smzdm, ctrip, youtube — powered by browser session reuse and AI-native discovery.
+A CLI tool that turns **any website** into a command-line interface — Bilibili, Zhihu, 小红书, Twitter/X, Reddit, YouTube, and [many more](#built-in-commands) — powered by browser session reuse and AI-native discovery.
 
 ---
 
@@ -21,6 +21,8 @@ A CLI tool that turns **any website** into a command-line interface. **57 comman
 - [Built-in Commands](#built-in-commands)
 - [Output Formats](#output-formats)
 - [For AI Agents (Developer Guide)](#for-ai-agents-developer-guide)
+- [Remote Chrome (Server/Headless)](#remote-chrome-serverheadless)
+- [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Releasing New Versions](#releasing-new-versions)
 - [License](#license)
@@ -31,8 +33,9 @@ A CLI tool that turns **any website** into a command-line interface. **57 comman
 
 - **Account-safe** — Reuses Chrome's logged-in state; your credentials never leave the browser.
 - **AI Agent ready** — `explore` discovers APIs, `synthesize` generates adapters, `cascade` finds auth strategies.
+- **Self-healing setup** — `opencli setup` auto-discovers tokens; `opencli doctor` diagnoses config across 10+ tools; `--fix` repairs them all.
 - **Dynamic Loader** — Simply drop `.ts` or `.yaml` adapters into the `clis/` folder for auto-registration.
-- **Dual-Engine Architecture** — Supports both YAML declarative data pipelines and robust browser runtime typescript injections.
+- **Dual-Engine Architecture** — Supports both YAML declarative data pipelines and robust browser runtime TypeScript injections.
 
 ## Prerequisites
 
@@ -41,16 +44,39 @@ A CLI tool that turns **any website** into a command-line interface. **57 comman
 
 > **⚠️ Important**: Browser commands reuse your Chrome login session. You must be logged into the target website in Chrome before running commands. If you get empty data or errors, check your login status first.
 
-OpenCLI needs a way to communicate with your browser. We highly recommend configuring **both** of the following methods for maximum reliability.
+OpenCLI connects to your browser through the Playwright MCP Bridge extension.
+It prefers an existing local/global `@playwright/mcp` install and falls back to `npx -y @playwright/mcp@latest` automatically when no local MCP server is found.
 
-### Connection Method A: Playwright MCP Bridge Extension (Primary)
+### Playwright MCP Bridge Extension Setup
 
 1. Install **[Playwright MCP Bridge](https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm)** extension in Chrome.
-2. Obtain your token by clicking the extension icon in the browser toolbar or from the extension settings page.
+2. Run `opencli setup` — discovers the token, distributes it to your tools, and verifies connectivity:
 
-**You must configure this token in BOTH your MCP configuration AND system environment variables.**
+```bash
+opencli setup
+```
 
-First, add it to your MCP client config (e.g. Claude/Cursor):
+The interactive TUI will:
+- 🔍 Auto-discover `PLAYWRIGHT_MCP_EXTENSION_TOKEN` from Chrome (no manual copy needed)
+- ☑️ Show all detected tools (Codex, Cursor, Claude Code, Gemini CLI, etc.)
+- ✏️ Update only the files you select (Space to toggle, Enter to confirm)
+- 🔌 Auto-verify browser connectivity after writing configs
+
+> **Tip**: Use `opencli doctor` for ongoing diagnosis and maintenance:
+> ```bash
+> opencli doctor            # Read-only token & config diagnosis
+> opencli doctor --live     # Also test live browser connectivity
+> opencli doctor --fix      # Fix mismatched configs (interactive)
+> opencli doctor --fix -y   # Fix all configs non-interactively
+> ```
+
+**Alternative: CDP Mode (For Servers/Headless)**
+If you cannot install the browser extension (e.g. running OpenCLI on a remote headless server), you can connect OpenCLI to your local Chrome via CDP using SSH tunnels or reverse proxies. See the [CDP Connection Guide](./CDP.md) for detailed instructions.
+
+<details>
+<summary>Manual setup (alternative)</summary>
+
+Add token to your MCP client config (e.g. Claude/Cursor):
 
 ```json
 {
@@ -66,21 +92,13 @@ First, add it to your MCP client config (e.g. Claude/Cursor):
 }
 ```
 
-And, so that `opencli` commands can use it directly in the terminal, export it in your shell environment (e.g. `~/.zshrc`):
+Export in shell (e.g. `~/.zshrc`):
 
 ```bash
 export PLAYWRIGHT_MCP_EXTENSION_TOKEN="<your-token-here>"
 ```
 
-### Connection Method B: Chrome 144+ Auto-Discovery (Fallback)
-
-No extensions needed. Just enable Chrome's built-in remote debugging:
-
-1. Open `chrome://inspect#remote-debugging` in Chrome
-2. Check **"Allow remote debugging for this browser instance"**
-3. Set `OPENCLI_USE_CDP=1` before running opencli
-
-*You can also manually specify an endpoint via `OPENCLI_CDP_ENDPOINT` env var.*
+</details>
 
 ## Quick Start
 
@@ -88,6 +106,7 @@ No extensions needed. Just enable Chrome's built-in remote debugging:
 
 ```bash
 npm install -g @jackwener/opencli
+opencli setup   # One-time: configure Playwright MCP token
 ```
 
 Then use directly:
@@ -120,25 +139,29 @@ npm install -g @jackwener/opencli@latest
 
 ## Built-in Commands
 
-| Site | Commands | Mode |
-|------|----------|------|
-| **bilibili** | `hot` `search` `me` `favorite` ... (11 commands) | 🔐 Browser |
-| **zhihu** | `hot` `search` `question` | 🔐 Browser |
-| **xiaohongshu** | `search` `notifications` `feed` `me` `user` | 🔐 Browser |
-| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` | 🔐 Browser |
-| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `following` `followers` `notifications` `post` `reply` `delete` `like` | 🔐 Browser |
-| **reddit** | `hot` `frontpage` `search` `subreddit` | 🔐 Browser |
-| **weibo** | `hot` | 🔐 Browser |
-| **boss** | `search` | 🔐 Browser |
-| **youtube** | `search` | 🔐 Browser |
-| **yahoo-finance** | `quote` | 🔐 Browser |
-| **reuters** | `search` | 🔐 Browser |
-| **smzdm** | `search` | 🔐 Browser |
-| **ctrip** | `search` | 🔐 Browser |
-| **github** | `search` | 🌐 Public |
-| **v2ex** | `hot` `latest` `topic` | 🌐 Public |
-| **hackernews** | `top` | 🌐 Public |
-| **bbc** | `news` | 🌐 Public |
+**19 sites · 80+ commands** — run `opencli list` for the live registry.
+
+| Site | Commands | Count | Mode |
+|------|----------|:-----:|------|
+| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` | 18 | 🔐 Browser |
+| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 15 | 🔐 Browser |
+| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` | 11 | 🔐 Browser |
+| **v2ex** | `hot` `latest` `topic` `daily` `me` `notifications` | 6 | 🌐 / 🔐 |
+| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` | 6 | 🔐 Browser |
+| **xiaohongshu** | `search` `notifications` `feed` `me` `user` | 5 | 🔐 Browser |
+| **youtube** | `search` `video` `transcript` | 3 | 🔐 Browser |
+| **zhihu** | `hot` `search` `question` | 3 | 🔐 Browser |
+| **boss** | `search` `detail` | 2 | 🔐 Browser |
+| **coupang** | `search` `add-to-cart` | 2 | 🔐 Browser |
+| **bbc** | `news` | 1 | 🌐 Public |
+| **ctrip** | `search` | 1 | 🔐 Browser |
+| **github** | `search` | 1 | 🌐 Public |
+| **hackernews** | `top` | 1 | 🌐 Public |
+| **linkedin** | `search` | 1 | 🔐 Browser |
+| **reuters** | `search` | 1 | 🔐 Browser |
+| **smzdm** | `search` | 1 | 🔐 Browser |
+| **weibo** | `hot` | 1 | 🔐 Browser |
+| **yahoo-finance** | `quote` | 1 | 🔐 Browser |
 
 ## Output Formats
 
@@ -159,8 +182,9 @@ opencli bilibili hot -v         # Verbose: show pipeline debug steps
 
 If you are an AI assistant tasked with creating a new command adapter for `opencli`, please follow the AI Agent workflow below:
 
-> **Information for AI:** 
-> Before writing any adapter code, you **must** read [CLI-CREATOR.md](./CLI-CREATOR.md). It contains the complete browser exploration workflow, the 5-tier authentication strategy decision tree, and debugging guide. Skipping this will lead to preventable errors.
+> **Quick mode**: To generate a single command for a specific page URL, see [CLI-ONESHOT.md](./CLI-ONESHOT.md) — just a URL + one-line goal, 4 steps done.
+
+> **Full mode**: Before writing any adapter code, read [CLI-EXPLORER.md](./CLI-EXPLORER.md). It contains the complete browser exploration workflow, the 5-tier authentication strategy decision tree, and debugging guide.
 
 ```bash
 # 1. Deep Explore — discover APIs, infer capabilities, detect framework
@@ -178,17 +202,35 @@ opencli cascade https://api.example.com/data
 
 Explore outputs to `.opencli/explore/<site>/` (manifest.json, endpoints.json, capabilities.json, auth.json).
 
+## Testing
+
+See **[TESTING.md](./TESTING.md)** for the full testing guide, including:
+
+- Current test coverage (unit + E2E tests across 19 sites)
+- How to run tests locally
+- How to add tests when creating new adapters
+- CI/CD pipeline with sharding
+- Headless browser mode (`OPENCLI_HEADLESS=1`)
+
+```bash
+# Quick start
+npm run build
+npx vitest run                              # All tests
+npx vitest run src/                          # Unit tests only
+npx vitest run tests/e2e/                    # E2E tests
+```
+
 ## Troubleshooting
 
 - **"Failed to connect to Playwright MCP Bridge"**
   - Ensure the Playwright MCP extension is installed and **enabled** in your running Chrome.
   - Restart the Chrome browser if you just installed the extension.
-- **"CDP command failed" or "boss search blocked"**
-  - Some sites (like BOSS Zhipin) actively block Chrome DevTools Protocol connections. OpenCLI falls back to cookie extraction, but ensure you didn't force `--chrome-mode` unnecessarily. 
 - **Empty data returns or 'Unauthorized' error**
   - Your login session in Chrome might have expired. Open a normal Chrome tab, navigate to the target site, and log in or refresh the page to prove you are human.
 - **Node API errors**
   - Make sure you are using Node.js >= 18. Some dependencies require modern Node APIs.
+- **Token issues**
+  - Run `opencli doctor` to diagnose token configuration across all tools.
 
 ## Releasing New Versions
 
@@ -202,4 +244,4 @@ The CI will automatically build, create a GitHub release, and publish to npm.
 
 ## License
 
-[BSD-3-Clause](./LICENSE)
+[Apache-2.0](./LICENSE)

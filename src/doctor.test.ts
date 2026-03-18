@@ -81,53 +81,143 @@ describe('json token helpers', () => {
       },
     }), 'abc123');
     const parsed = JSON.parse(next);
-    expect(parsed.mcp.playwright.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN).toBe('abc123');
+    expect(parsed.mcp.playwright.environment.PLAYWRIGHT_MCP_EXTENSION_TOKEN).toBe('abc123');
+  });
+
+  it('creates standard mcpServers format for empty file (not OpenCode)', () => {
+    const next = upsertJsonConfigToken('', 'abc123');
+    const parsed = JSON.parse(next);
+    expect(parsed.mcpServers.playwright.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN).toBe('abc123');
+    expect(parsed.mcp).toBeUndefined();
+  });
+
+  it('creates OpenCode format when filePath contains opencode', () => {
+    const next = upsertJsonConfigToken('', 'abc123', '/home/user/.config/opencode/opencode.json');
+    const parsed = JSON.parse(next);
+    expect(parsed.mcp.playwright.environment.PLAYWRIGHT_MCP_EXTENSION_TOKEN).toBe('abc123');
+    expect(parsed.mcpServers).toBeUndefined();
+  });
+
+  it('creates standard format when filePath is claude.json', () => {
+    const next = upsertJsonConfigToken('', 'abc123', '/home/user/.claude.json');
+    const parsed = JSON.parse(next);
+    expect(parsed.mcpServers.playwright.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN).toBe('abc123');
+  });
+});
+
+describe('fish shell support', () => {
+  it('generates fish set -gx syntax for fish config path', () => {
+    const next = upsertShellToken('', 'abc123', '/home/user/.config/fish/config.fish');
+    expect(next).toContain('set -gx PLAYWRIGHT_MCP_EXTENSION_TOKEN "abc123"');
+    expect(next).not.toContain('export');
+  });
+
+  it('replaces existing fish set line', () => {
+    const content = 'set -gx PLAYWRIGHT_MCP_EXTENSION_TOKEN "old"\n';
+    const next = upsertShellToken(content, 'new', '/home/user/.config/fish/config.fish');
+    expect(next).toContain('set -gx PLAYWRIGHT_MCP_EXTENSION_TOKEN "new"');
+    expect(next).not.toContain('"old"');
+  });
+
+  it('appends fish syntax to existing fish config', () => {
+    const content = 'set -gx PATH /usr/bin\n';
+    const next = upsertShellToken(content, 'abc123', '/home/user/.config/fish/config.fish');
+    expect(next).toContain('set -gx PLAYWRIGHT_MCP_EXTENSION_TOKEN "abc123"');
+    expect(next).toContain('set -gx PATH /usr/bin');
+  });
+
+  it('uses export syntax for zshrc even with filePath', () => {
+    const next = upsertShellToken('', 'abc123', '/home/user/.zshrc');
+    expect(next).toContain('export PLAYWRIGHT_MCP_EXTENSION_TOKEN="abc123"');
+    expect(next).not.toContain('set -gx');
   });
 });
 
 describe('doctor report rendering', () => {
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
   it('renders OK-style report when tokens match', () => {
-    const text = renderBrowserDoctorReport({
+    const text = strip(renderBrowserDoctorReport({
       envToken: 'abc123',
       envFingerprint: 'fp1',
+      extensionToken: 'abc123',
+      extensionFingerprint: 'fp1',
+      extensionInstalled: true,
+      extensionBrowsers: ['Chrome'],
       shellFiles: [{ path: '/tmp/.zshrc', exists: true, token: 'abc123', fingerprint: 'fp1' }],
       configs: [{ path: '/tmp/mcp.json', exists: true, format: 'json', token: 'abc123', fingerprint: 'fp1', writable: true }],
-      remoteDebuggingEnabled: true,
-      remoteDebuggingEndpoint: 'ws://127.0.0.1:9222/devtools/browser/test',
-      cdpEnabled: false,
-      cdpToken: null,
-      cdpFingerprint: null,
       recommendedToken: 'abc123',
       recommendedFingerprint: 'fp1',
       warnings: [],
       issues: [],
-    });
+    }));
 
-    expect(text).toContain('[OK] Chrome remote debugging: enabled');
+    expect(text).toContain('[OK] Extension installed (Chrome)');
     expect(text).toContain('[OK] Environment token: configured (fp1)');
-    expect(text).toContain('[OK] MCP config /tmp/mcp.json: configured (fp1)');
+    expect(text).toContain('[OK] /tmp/mcp.json');
+    expect(text).toContain('configured (fp1)');
   });
 
   it('renders MISMATCH-style report when fingerprints differ', () => {
-    const text = renderBrowserDoctorReport({
+    const text = strip(renderBrowserDoctorReport({
       envToken: 'abc123',
       envFingerprint: 'fp1',
+      extensionToken: null,
+      extensionFingerprint: null,
+      extensionInstalled: false,
+      extensionBrowsers: [],
       shellFiles: [{ path: '/tmp/.zshrc', exists: true, token: 'def456', fingerprint: 'fp2' }],
       configs: [{ path: '/tmp/mcp.json', exists: true, format: 'json', token: 'abc123', fingerprint: 'fp1', writable: true }],
-      remoteDebuggingEnabled: false,
-      remoteDebuggingEndpoint: null,
-      cdpEnabled: false,
-      cdpToken: null,
-      cdpFingerprint: null,
       recommendedToken: 'abc123',
       recommendedFingerprint: 'fp1',
-      warnings: ['Chrome remote debugging appears to be disabled or Chrome is not currently exposing a DevTools endpoint.'],
+      warnings: [],
       issues: ['Detected inconsistent Playwright MCP tokens across env/config files.'],
-    });
+    }));
 
-    expect(text).toContain('[WARN] Chrome remote debugging: disabled');
+    expect(text).toContain('[MISSING] Extension not installed in any browser');
     expect(text).toContain('[MISMATCH] Environment token: configured (fp1)');
-    expect(text).toContain('[MISMATCH] Shell file /tmp/.zshrc: configured (fp2)');
+    expect(text).toContain('[MISMATCH] /tmp/.zshrc');
+    expect(text).toContain('configured (fp2)');
     expect(text).toContain('[MISMATCH] Recommended token fingerprint: fp1');
   });
+
+  it('renders connectivity OK when live test succeeds', () => {
+    const text = strip(renderBrowserDoctorReport({
+      envToken: 'abc123',
+      envFingerprint: 'fp1',
+      extensionToken: 'abc123',
+      extensionFingerprint: 'fp1',
+      extensionInstalled: true,
+      extensionBrowsers: ['Chrome'],
+      shellFiles: [],
+      configs: [],
+      recommendedToken: 'abc123',
+      recommendedFingerprint: 'fp1',
+      connectivity: { ok: true, durationMs: 1234 },
+      warnings: [],
+      issues: [],
+    }));
+
+    expect(text).toContain('[OK] Browser connectivity: connected in 1.2s');
+  });
+
+  it('renders connectivity WARN when not tested', () => {
+    const text = strip(renderBrowserDoctorReport({
+      envToken: 'abc123',
+      envFingerprint: 'fp1',
+      extensionToken: 'abc123',
+      extensionFingerprint: 'fp1',
+      extensionInstalled: true,
+      extensionBrowsers: ['Chrome'],
+      shellFiles: [],
+      configs: [],
+      recommendedToken: 'abc123',
+      recommendedFingerprint: 'fp1',
+      warnings: [],
+      issues: [],
+    }));
+
+    expect(text).toContain('[WARN] Browser connectivity: not tested (use --live)');
+  });
 });
+

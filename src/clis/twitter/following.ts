@@ -1,5 +1,4 @@
 import { cli, Strategy } from '../../registry.js';
-import * as fs from 'fs';
 
 cli({
   site: 'twitter',
@@ -53,15 +52,14 @@ cli({
 
     // 4. Retrieve data from opencli's registered interceptors
     const requests = await page.getInterceptedRequests();
+    const requestList = Array.isArray(requests) ? requests : [];
     
-    // Debug: Force dump all intercepted XHRs that match following
-    if (!requests || requests.length === 0) {
-       console.log('No Following requests captured by the interceptor backend.');
+    if (requestList.length === 0) {
        return [];
     }
 
     let results: any[] = [];
-    for (const req of requests) {
+    for (const req of requestList) {
       try {
         let instructions = req.data?.data?.user?.result?.timeline?.timeline?.instructions;
         if (!instructions) continue;

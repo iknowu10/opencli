@@ -38,6 +38,49 @@ interface CascadeResult {
 }
 
 /**
+ * Build the JavaScript source for a fetch probe.
+ * Shared logic for PUBLIC, COOKIE, and HEADER strategies.
+ */
+function buildFetchProbeJs(url: string, opts: {
+  credentials?: boolean;
+  extractCsrf?: boolean;
+}): string {
+  const credentialsLine = opts.credentials ? `credentials: 'include',` : '';
+  const headerSetup = opts.extractCsrf
+    ? `
+      const cookies = document.cookie.split(';').map(c => c.trim());
+      const csrf = cookies.find(c => c.startsWith('ct0=') || c.startsWith('csrf_token=') || c.startsWith('_csrf='))?.split('=').slice(1).join('=');
+      const headers = {};
+      if (csrf) { headers['X-Csrf-Token'] = csrf; headers['X-XSRF-Token'] = csrf; }
+    `
+    : 'const headers = {};';
+
+  return `
+    async () => {
+      try {
+        ${headerSetup}
+        const resp = await fetch(${JSON.stringify(url)}, {
+          ${credentialsLine}
+          headers
+        });
+        const status = resp.status;
+        if (!resp.ok) return { status, ok: false };
+        const text = await resp.text();
+        let hasData = false;
+        try {
+          const json = JSON.parse(text);
+          hasData = !!json && (Array.isArray(json) ? json.length > 0 :
+            typeof json === 'object' && Object.keys(json).length > 0);
+          // Check for API-level error codes (common in Chinese sites)
+          if (json.code !== undefined && json.code !== 0) hasData = false;
+        } catch {}
+        return { status, ok: true, hasData, preview: text.slice(0, 200) };
+      } catch (e) { return { ok: false, error: e.message }; }
+    }
+  `;
+}
+
+/**
  * Probe an endpoint with a specific strategy.
  * Returns whether the probe succeeded and basic response info.
  */
@@ -45,32 +88,14 @@ export async function probeEndpoint(
   page: IPage,
   url: string,
   strategy: Strategy,
-  opts: { timeout?: number } = {},
+  _opts: { timeout?: number } = {},
 ): Promise<ProbeResult> {
   const result: ProbeResult = { strategy, success: false };
 
   try {
     switch (strategy) {
       case Strategy.PUBLIC: {
-        // Try direct fetch without browser (no credentials)
-        const js = `
-          async () => {
-            try {
-              const resp = await fetch(${JSON.stringify(url)});
-              const status = resp.status;
-              if (!resp.ok) return { status, ok: false };
-              const text = await resp.text();
-              let hasData = false;
-              try {
-                const json = JSON.parse(text);
-                hasData = !!json && (Array.isArray(json) ? json.length > 0 :
-                  typeof json === 'object' && Object.keys(json).length > 0);
-              } catch {}
-              return { status, ok: true, hasData, preview: text.slice(0, 200) };
-            } catch (e) { return { ok: false, error: e.message }; }
-          }
-        `;
-        const resp = await page.evaluate(js);
+        const resp = await page.evaluate(buildFetchProbeJs(url, {}));
         result.statusCode = resp?.status;
         result.success = resp?.ok && resp?.hasData;
         result.hasData = resp?.hasData;
@@ -79,27 +104,7 @@ export async function probeEndpoint(
       }
 
       case Strategy.COOKIE: {
-        // Fetch with credentials: 'include' (uses browser cookies)
-        const js = `
-          async () => {
-            try {
-              const resp = await fetch(${JSON.stringify(url)}, { credentials: 'include' });
-              const status = resp.status;
-              if (!resp.ok) return { status, ok: false };
-              const text = await resp.text();
-              let hasData = false;
-              try {
-                const json = JSON.parse(text);
-                hasData = !!json && (Array.isArray(json) ? json.length > 0 :
-                  typeof json === 'object' && Object.keys(json).length > 0);
-                // Check for API-level error codes (common in Chinese sites)
-                if (json.code !== undefined && json.code !== 0) hasData = false;
-              } catch {}
-              return { status, ok: true, hasData, preview: text.slice(0, 200) };
-            } catch (e) { return { ok: false, error: e.message }; }
-          }
-        `;
-        const resp = await page.evaluate(js);
+        const resp = await page.evaluate(buildFetchProbeJs(url, { credentials: true }));
         result.statusCode = resp?.status;
         result.success = resp?.ok && resp?.hasData;
         result.hasData = resp?.hasData;
@@ -108,39 +113,7 @@ export async function probeEndpoint(
       }
 
       case Strategy.HEADER: {
-        // Fetch with credentials + try to extract common auth headers
-        const js = `
-          async () => {
-            try {
-              // Try to extract CSRF tokens from cookies
-              const cookies = document.cookie.split(';').map(c => c.trim());
-              const csrf = cookies.find(c => c.startsWith('ct0=') || c.startsWith('csrf_token=') || c.startsWith('_csrf='))?.split('=').slice(1).join('=');
-              
-              const headers = {};
-              if (csrf) {
-                headers['X-Csrf-Token'] = csrf;
-                headers['X-XSRF-Token'] = csrf;
-              }
-              
-              const resp = await fetch(${JSON.stringify(url)}, {
-                credentials: 'include',
-                headers
-              });
-              const status = resp.status;
-              if (!resp.ok) return { status, ok: false };
-              const text = await resp.text();
-              let hasData = false;
-              try {
-                const json = JSON.parse(text);
-                hasData = !!json && (Array.isArray(json) ? json.length > 0 :
-                  typeof json === 'object' && Object.keys(json).length > 0);
-                if (json.code !== undefined && json.code !== 0) hasData = false;
-              } catch {}
-              return { status, ok: true, hasData, preview: text.slice(0, 200) };
-            } catch (e) { return { ok: false, error: e.message }; }
-          }
-        `;
-        const resp = await page.evaluate(js);
+        const resp = await page.evaluate(buildFetchProbeJs(url, { credentials: true, extractCsrf: true }));
         result.statusCode = resp?.status;
         result.success = resp?.ok && resp?.hasData;
         result.hasData = resp?.hasData;
@@ -151,7 +124,6 @@ export async function probeEndpoint(
       case Strategy.INTERCEPT:
       case Strategy.UI:
         // These require specific implementation per-site
-        // Mark as needing manual implementation
         result.success = false;
         result.error = `Strategy ${strategy} requires site-specific implementation`;
         break;

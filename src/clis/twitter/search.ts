@@ -13,13 +13,16 @@ cli({
   ],
   columns: ['id', 'author', 'text', 'likes', 'views', 'url'],
   func: async (page, kwargs) => {
+    // Install the interceptor before opening the target page so we don't miss
+    // the initial SearchTimeline request fired during hydration.
+    await page.goto('https://x.com');
+    await page.wait(2);
+    await page.installInterceptor('SearchTimeline');
+
     // 1. Navigate to the search page
     const q = encodeURIComponent(kwargs.query);
     await page.goto(`https://x.com/search?q=${q}&f=top`);
     await page.wait(5);
-
-    // 2. Inject XHR interceptor
-    await page.installInterceptor('SearchTimeline');
 
     // 3. Trigger API by scrolling
     await page.autoScroll({ times: 3, delayMs: 2000 });
@@ -29,11 +32,13 @@ cli({
     if (!requests || requests.length === 0) return [];
 
     let results: any[] = [];
+    const seen = new Set<string>();
     for (const req of requests) {
       try {
-        const insts = req.data.data.search_by_raw_query.search_timeline.timeline.instructions;
-        const addEntries = insts.find((i: any) => i.type === 'TimelineAddEntries');
-        if (!addEntries) continue;
+        const insts = req.data?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions || [];
+        const addEntries = insts.find((i: any) => i.type === 'TimelineAddEntries')
+          || insts.find((i: any) => i.entries && Array.isArray(i.entries));
+        if (!addEntries?.entries) continue;
 
         for (const entry of addEntries.entries) {
           if (!entry.entryId.startsWith('tweet-')) continue;
@@ -45,11 +50,13 @@ cli({
           if (tweet.__typename === 'TweetWithVisibilityResults' && tweet.tweet) {
               tweet = tweet.tweet;
           }
+          if (!tweet.rest_id || seen.has(tweet.rest_id)) continue;
+          seen.add(tweet.rest_id);
 
           results.push({
             id: tweet.rest_id,
             author: tweet.core?.user_results?.result?.legacy?.screen_name || 'unknown',
-            text: tweet.legacy?.full_text || '',
+            text: tweet.note_tweet?.note_tweet_results?.result?.text || tweet.legacy?.full_text || '',
             likes: tweet.legacy?.favorite_count || 0,
             views: tweet.views?.count || '0',
             url: `https://x.com/i/status/${tweet.rest_id}`

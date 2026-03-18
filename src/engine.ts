@@ -11,9 +11,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
-import { type CliCommand, type Arg, Strategy, registerCommand } from './registry.js';
+import { type CliCommand, type InternalCliCommand, type Arg, Strategy, registerCommand } from './registry.js';
 import type { IPage } from './types.js';
 import { executePipeline } from './pipeline.js';
+import { log } from './logger.js';
+import { AdapterLoadError } from './errors.js';
 
 /** Set of TS module paths that have been loaded */
 const _loadedModules = new Set<string>();
@@ -66,7 +68,7 @@ function loadFromManifest(manifestPath: string, clisDir: string): void {
         // The actual module is loaded lazily on first executeCommand().
         const strategy = (Strategy as any)[(entry.strategy ?? 'cookie').toUpperCase()] ?? Strategy.COOKIE;
         const modulePath = path.resolve(clisDir, entry.modulePath);
-        const cmd: CliCommand = {
+        const cmd: InternalCliCommand = {
           site: entry.site,
           name: entry.name,
           description: entry.description ?? '',
@@ -77,7 +79,6 @@ function loadFromManifest(manifestPath: string, clisDir: string): void {
           columns: entry.columns,
           timeoutSeconds: entry.timeout,
           source: modulePath,
-          // Mark as lazy — executeCommand will load the module before running
           _lazy: true,
           _modulePath: modulePath,
         };
@@ -85,7 +86,7 @@ function loadFromManifest(manifestPath: string, clisDir: string): void {
       }
     }
   } catch (err: any) {
-    process.stderr.write(`Warning: failed to load manifest ${manifestPath}: ${err.message}\n`);
+    log.warn(`Failed to load manifest ${manifestPath}: ${err.message}`);
   }
 }
 
@@ -102,10 +103,13 @@ async function discoverClisFromFs(dir: string): Promise<void> {
       const filePath = path.join(siteDir, file);
       if (file.endsWith('.yaml') || file.endsWith('.yml')) {
         registerYamlCli(filePath, site);
-      } else if (file.endsWith('.js') && !file.endsWith('.d.js')) {
+      } else if (
+        (file.endsWith('.js') && !file.endsWith('.d.js')) ||
+        (file.endsWith('.ts') && !file.endsWith('.d.ts') && !file.endsWith('.test.ts'))
+      ) {
         promises.push(
           import(`file://${filePath}`).catch((err: any) => {
-            process.stderr.write(`Warning: failed to load module ${filePath}: ${err.message}\n`);
+            log.warn(`Failed to load module ${filePath}: ${err.message}`);
           })
         );
       }
@@ -156,8 +160,57 @@ function registerYamlCli(filePath: string, defaultSite: string): void {
 
     registerCommand(cmd);
   } catch (err: any) {
-    process.stderr.write(`Warning: failed to load ${filePath}: ${err.message}\n`);
+    log.warn(`Failed to load ${filePath}: ${err.message}`);
   }
+}
+
+/**
+ * Validates and coerces arguments based on the command's Arg definitions.
+ */
+function coerceAndValidateArgs(cmdArgs: Arg[], kwargs: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = { ...kwargs };
+
+  for (const argDef of cmdArgs) {
+    const val = result[argDef.name];
+    
+    // 1. Check required
+    if (argDef.required && (val === undefined || val === null || val === '')) {
+      throw new Error(`Argument "${argDef.name}" is required.\n${argDef.help ? `Hint: ${argDef.help}` : ''}`);
+    }
+
+    if (val !== undefined && val !== null) {
+      // 2. Type coercion
+      if (argDef.type === 'int' || argDef.type === 'number') {
+        const num = Number(val);
+        if (Number.isNaN(num)) {
+          throw new Error(`Argument "${argDef.name}" must be a valid number. Received: "${val}"`);
+        }
+        result[argDef.name] = num;
+      } else if (argDef.type === 'boolean' || argDef.type === 'bool') {
+        if (typeof val === 'string') {
+          const lower = val.toLowerCase();
+          if (lower === 'true' || lower === '1') result[argDef.name] = true;
+          else if (lower === 'false' || lower === '0') result[argDef.name] = false;
+          else throw new Error(`Argument "${argDef.name}" must be a boolean (true/false). Received: "${val}"`);
+        } else {
+          result[argDef.name] = Boolean(val);
+        }
+      }
+
+      // 3. Choices validation
+      const coercedVal = result[argDef.name];
+      if (argDef.choices && argDef.choices.length > 0) {
+        // Only stringent check for string/number types against choices array
+        if (!argDef.choices.map(String).includes(String(coercedVal))) {
+          throw new Error(`Argument "${argDef.name}" must be one of: ${argDef.choices.join(', ')}. Received: "${coercedVal}"`);
+        }
+      }
+    } else if (argDef.default !== undefined) {
+      // Set default if value is missing
+      result[argDef.name] = argDef.default;
+    }
+  }
+  return result;
 }
 
 /**
@@ -166,18 +219,30 @@ function registerYamlCli(filePath: string, defaultSite: string): void {
 export async function executeCommand(
   cmd: CliCommand,
   page: IPage | null,
-  kwargs: Record<string, any>,
+  rawKwargs: Record<string, any>,
   debug: boolean = false,
 ): Promise<any> {
+  let kwargs: Record<string, any>;
+  try {
+    kwargs = coerceAndValidateArgs(cmd.args, rawKwargs);
+  } catch (err: any) {
+    // Re-throw validation errors clearly
+    throw new Error(`[Argument Validation Error]\n${err.message}`);
+  }
+
   // Lazy-load TS module on first execution
-  if ((cmd as any)._lazy && (cmd as any)._modulePath) {
-    const modulePath = (cmd as any)._modulePath;
+  const internal = cmd as InternalCliCommand;
+  if (internal._lazy && internal._modulePath) {
+    const modulePath = internal._modulePath;
     if (!_loadedModules.has(modulePath)) {
       try {
         await import(`file://${modulePath}`);
         _loadedModules.add(modulePath);
       } catch (err: any) {
-        throw new Error(`Failed to load adapter module ${modulePath}: ${err.message}`);
+        throw new AdapterLoadError(
+          `Failed to load adapter module ${modulePath}: ${err.message}`,
+          'Check that the adapter file exists and has no syntax errors.',
+        );
       }
     }
     // After loading, the module's cli() call will have updated the registry
@@ -185,7 +250,7 @@ export async function executeCommand(
     const { getRegistry, fullName } = await import('./registry.js');
     const updated = getRegistry().get(fullName(cmd));
     if (updated && updated.func) {
-      return updated.func(page, kwargs, debug);
+      return updated.func(page!, kwargs, debug);
     }
     if (updated && updated.pipeline) {
       return executePipeline(page, updated.pipeline, { args: kwargs, debug });
@@ -193,7 +258,7 @@ export async function executeCommand(
   }
 
   if (cmd.func) {
-    return cmd.func(page, kwargs, debug);
+    return cmd.func(page!, kwargs, debug);
   }
   if (cmd.pipeline) {
     return executePipeline(page, cmd.pipeline, { args: kwargs, debug });

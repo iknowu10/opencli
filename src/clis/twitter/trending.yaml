@@ -25,9 +25,15 @@ pipeline:
           credentials: 'include',
           headers: { 'x-twitter-active-user': 'yes', 'x-csrf-token': csrfToken, 'authorization': 'Bearer ' + bearerToken }
         });
+        if (!res.ok) throw new Error('HTTP ' + res.status + '. Hint: trending endpoint may require login or API shape changed.');
         const data = await res.json();
-        const trends = data?.timeline?.instructions?.[1]?.addEntries?.entries || [];
-        return trends.filter(e => e.content?.timelineModule).flatMap(e => e.content.timelineModule.items || []).map(t => t?.item?.content?.trend).filter(Boolean);
+        const instructions = data?.timeline?.instructions || [];
+        const entries = instructions.flatMap(inst => inst?.addEntries?.entries || inst?.entries || []);
+        return entries
+          .filter(e => e.content?.timelineModule)
+          .flatMap(e => e.content.timelineModule.items || [])
+          .map(t => t?.item?.content?.trend)
+          .filter(Boolean);
       })()
 
   - map:

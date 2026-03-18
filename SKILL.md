@@ -1,9 +1,9 @@
 ---
 name: opencli
-description: "OpenCLI — Make any website your CLI. Zero risk, AI-powered, reuse Chrome login."
-version: 0.4.0
+description: "OpenCLI — Make any website your CLI. Zero risk, AI-powered, reuse Chrome login. 80+ commands across 19 sites."
+version: 0.7.3
 author: jackwener
-tags: [cli, browser, web, mcp, playwright, bilibili, zhihu, twitter, github, v2ex, hackernews, reddit, xiaohongshu, xueqiu, AI, agent]
+tags: [cli, browser, web, mcp, playwright, bilibili, zhihu, twitter, github, v2ex, hackernews, reddit, xiaohongshu, xueqiu, youtube, boss, coupang, AI, agent]
 ---
 
 # OpenCLI
@@ -11,7 +11,7 @@ tags: [cli, browser, web, mcp, playwright, bilibili, zhihu, twitter, github, v2e
 > Make any website your CLI. Reuse Chrome login, zero risk, AI-powered discovery.
 
 > [!CAUTION]
-> **AI Agent 必读：创建或修改任何适配器之前，你必须先阅读 [CLI-CREATOR.md](./CLI-CREATOR.md)！**
+> **AI Agent 必读：创建或修改任何适配器之前，你必须先阅读 [CLI-EXPLORER.md](./CLI-EXPLORER.md)！**
 > 该文档包含完整的 API 发现工作流（必须使用 Playwright MCP Bridge 浏览器探索）、5 级认证策略决策树、平台 SDK 速查表、`tap` 步骤调试流程、分页 API 模板、级联请求模式、以及常见陷阱。
 > **本文件（SKILL.md）仅提供命令参考和简化模板，不足以正确开发适配器。**
 
@@ -34,8 +34,8 @@ npm update -g @jackwener/opencli
 
 Browser commands require:
 1. Chrome browser running **(logged into target sites)**
-2. [Playwright MCP Bridge](https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm) extension (default connection mode)
-3. **Alternative**: Chrome 144+ CDP auto-discovery — set `OPENCLI_USE_CDP=1` (no extension needed)
+2. [Playwright MCP Bridge](https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm) extension installed
+3. Run `opencli setup` to auto-discover token and configure all tools
 
 > **Note**: You must be logged into the target website in Chrome before running commands. Tabs opened during command execution are auto-closed afterwards.
 
@@ -68,7 +68,7 @@ opencli zhihu question --id 34816524     # 问题详情和回答
 opencli xiaohongshu search --keyword "美食"  # 搜索笔记
 opencli xiaohongshu notifications             # 通知（mentions/likes/connections）
 opencli xiaohongshu feed --limit 10           # 推荐 Feed
-opencli xiaohongshu me                         # 我的信息
+opencli xiaohongshu me                        # 我的信息
 opencli xiaohongshu user --uid xxx             # 用户主页
 
 # 雪球 Xueqiu (browser)
@@ -86,20 +86,40 @@ opencli github search --keyword "cli"    # 搜索仓库
 opencli twitter trending --limit 10      # 热门话题
 opencli twitter bookmarks --limit 20     # 获取收藏的书签推文
 opencli twitter search --keyword "AI"    # 搜索推文
-opencli twitter profile --username elonmusk  # 用户资料
+opencli twitter profile elonmusk         # 用户资料
 opencli twitter timeline --limit 20      # 时间线
+opencli twitter thread 1234567890        # 推文 thread（原文 + 回复）
+opencli twitter article 1891511252174299446 # 推文长文内容
+opencli twitter follow elonmusk          # 关注用户
+opencli twitter unfollow elonmusk        # 取消关注
+opencli twitter bookmark https://x.com/... # 收藏推文
+opencli twitter unbookmark https://x.com/... # 取消收藏
 
 # Reddit (browser)
 opencli reddit hot --limit 10            # 热门帖子
 opencli reddit hot --subreddit programming  # 指定子版块
-opencli reddit frontpage --limit 10      # 首页
-opencli reddit search --keyword "AI"     # 搜索
-opencli reddit subreddit --name rust     # 子版块浏览
+opencli reddit frontpage --limit 10      # 首页 /r/all
+opencli reddit popular --limit 10        # /r/popular 热门
+opencli reddit search --query "AI" --sort top --time week  # 搜索（支持排序+时间过滤）
+opencli reddit subreddit --name rust --sort top --time month  # 子版块浏览（支持时间过滤）
+opencli reddit read --post_id 1abc123    # 阅读帖子 + 评论
+opencli reddit user --username spez      # 用户资料（karma、注册时间）
+opencli reddit user-posts --username spez  # 用户发帖历史
+opencli reddit user-comments --username spez  # 用户评论历史
+opencli reddit upvote --post_id xxx --direction up  # 投票（up/down/none）
+opencli reddit save --post_id xxx        # 收藏帖子
+opencli reddit comment --post_id xxx --text "Great!"  # 发表评论
+opencli reddit subscribe --subreddit python  # 订阅子版块
+opencli reddit saved --limit 10          # 我的收藏
+opencli reddit upvoted --limit 10        # 我的赞
 
-# V2EX (public)
+# V2EX (public + browser)
 opencli v2ex hot --limit 10              # 热门话题
 opencli v2ex latest --limit 10           # 最新话题
 opencli v2ex topic --id 1024             # 主题详情
+opencli v2ex daily                       # 每日签到 (browser)
+opencli v2ex me                          # 我的信息 (browser)
+opencli v2ex notifications --limit 10    # 通知 (browser)
 
 # Hacker News (public)
 opencli hackernews top --limit 10        # Top stories
@@ -112,9 +132,13 @@ opencli weibo hot --limit 10            # 微博热搜
 
 # BOSS直聘 (browser)
 opencli boss search --query "AI agent"  # 搜索职位
+opencli boss detail --securityId xxx    # 职位详情
 
 # YouTube (browser)
 opencli youtube search --query "rust"   # 搜索视频
+opencli youtube video --url "https://www.youtube.com/watch?v=xxx"  # 视频元数据（标题、播放量、描述等）
+opencli youtube transcript --url "https://www.youtube.com/watch?v=xxx"  # 获取视频字幕/转录
+opencli youtube transcript --url "xxx" --lang zh-Hans --mode raw  # 指定语言 + 原始时间戳模式
 
 # Yahoo Finance (browser)
 opencli yahoo-finance quote --symbol AAPL  # 股票行情
@@ -137,6 +161,11 @@ opencli list --json         # JSON output
 opencli list -f yaml        # YAML output
 opencli validate            # Validate all CLI definitions
 opencli validate bilibili   # Validate specific site
+opencli setup               # Interactive token setup (auto-discover + TUI checkbox)
+opencli doctor              # Diagnose token & extension config across all tools
+opencli doctor --live       # Also test live browser connectivity
+opencli doctor --fix        # Fix mismatched configs (interactive confirmation)
+opencli doctor --fix -y     # Fix all configs non-interactively
 ```
 
 ### AI Agent Workflow
@@ -157,8 +186,8 @@ opencli cascade <api-url>
 # Explore with interactive fuzzing (click buttons to trigger lazy APIs)
 opencli explore <url> --auto --click "字幕,CC,评论"
 
-# Verify: smoke-test a generated adapter
-opencli verify <site/name> --smoke
+# Verify: validate adapter definitions
+opencli verify
 ```
 
 ## Output Formats
@@ -183,8 +212,12 @@ opencli bilibili hot -v         # Show each pipeline step and data flow
 
 ## Creating Adapters
 
+> [!TIP]
+> **快速模式**：如果你只想为一个具体页面生成一个命令，直接看 [CLI-ONESHOT.md](./CLI-ONESHOT.md)。
+> 只需要一个 URL + 一句话描述，4 步搞定。
+
 > [!IMPORTANT]
-> **STOP — 在写任何代码之前，先阅读 [CLI-CREATOR.md](./CLI-CREATOR.md)。**
+> **完整模式 — 在写任何代码之前，先阅读 [CLI-EXPLORER.md](./CLI-EXPLORER.md)。**
 > 它包含：① AI Agent 浏览器探索工作流（必须用 Playwright MCP 抓包验证 API）② 认证策略决策树 ③ 平台 SDK（如 Bilibili 的 `apiGet`/`fetchJson`）④ YAML vs TS 选择指南 ⑤ `tap` 步骤调试方法 ⑥ 级联请求模板 ⑦ 常见陷阱表。
 > **下方仅为简化模板参考，直接使用极易踩坑。**
 
@@ -335,10 +368,6 @@ ${{ index + 1 }}
 | `OPENCLI_BROWSER_CONNECT_TIMEOUT` | 30 | Browser connection timeout (sec) |
 | `OPENCLI_BROWSER_COMMAND_TIMEOUT` | 45 | Command execution timeout (sec) |
 | `OPENCLI_BROWSER_EXPLORE_TIMEOUT` | 120 | Explore timeout (sec) |
-| `OPENCLI_EXTENSION_LOCK_TIMEOUT` | 120 | Extension lock timeout (sec) |
-| `OPENCLI_CDP_ENDPOINT` | — | Manual CDP WebSocket endpoint (overrides auto-discovery) |
-| `OPENCLI_USE_CDP` | — | Set to `1` to use Chrome 144+ CDP auto-discovery instead of extension |
-| `OPENCLI_FORCE_EXTENSION` | — | Set to `1` to skip CDP and force extension mode |
 | `PLAYWRIGHT_MCP_EXTENSION_TOKEN` | — | Auto-approve extension connection |
 
 ## Troubleshooting
@@ -346,7 +375,6 @@ ${{ index + 1 }}
 | Issue | Solution |
 |-------|----------|
 | `npx not found` | Install Node.js: `brew install node` |
-| `Timed out connecting to browser` | 1) Chrome must be open 2) Enable remote debugging at `chrome://inspect#remote-debugging` or install MCP Bridge extension |
-| `Extension lock timed out` | Another opencli command is running; browser commands run serially |
+| `Timed out connecting to browser` | 1) Chrome must be open 2) Install MCP Bridge extension and configure token |
 | `Target page context` error | Add `navigate:` step before `evaluate:` in YAML |
 | Empty table data | Check if evaluate returns JSON string (MCP parsing) or data path is wrong |
