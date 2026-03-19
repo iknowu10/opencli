@@ -1,7 +1,7 @@
 # OpenCLI
 
-> **Make any website your CLI.**  
-> Zero risk · Reuse Chrome login · AI-powered discovery · 80+ commands · 19 sites
+> **Make any website or Electron App your CLI.**  
+> Zero risk · Reuse Chrome login · AI-powered discovery · Browser + Desktop automation
 
 [中文文档](./README.zh-CN.md)
 
@@ -9,7 +9,10 @@
 [![Node.js Version](https://img.shields.io/node/v/@jackwener/opencli?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/npm/l/@jackwener/opencli?style=flat-square)](./LICENSE)
 
-A CLI tool that turns **any website** into a command-line interface — Bilibili, Zhihu, 小红书, Twitter/X, Reddit, YouTube, and [many more](#built-in-commands) — powered by browser session reuse and AI-native discovery.
+A CLI tool that turns **any website** or **Electron app** into a command-line interface — Bilibili, Zhihu, 小红书, Twitter/X, Reddit, YouTube, Antigravity, and [many more](#built-in-commands) — powered by browser session reuse and AI-native discovery.
+
+🔥 **CLI All Electron Apps! The Most Powerful Update Has Arrived!** 🔥
+Turn ANY Electron application into a CLI tool! Recombine, script, and extend applications like Antigravity Ultra seamlessly. Now AI can control itself natively. Unlimited possibilities await!
 
 ---
 
@@ -19,6 +22,7 @@ A CLI tool that turns **any website** into a command-line interface — Bilibili
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
 - [Built-in Commands](#built-in-commands)
+- [Download Support](#download-support)
 - [Output Formats](#output-formats)
 - [For AI Agents (Developer Guide)](#for-ai-agents-developer-guide)
 - [Remote Chrome (Server/Headless)](#remote-chrome-serverheadless)
@@ -31,6 +35,7 @@ A CLI tool that turns **any website** into a command-line interface — Bilibili
 
 ## Highlights
 
+- **CLI All Electron** — CLI-ify apps like Antigravity Ultra! Now AI can control itself natively using cc/openclaw!
 - **Account-safe** — Reuses Chrome's logged-in state; your credentials never leave the browser.
 - **AI Agent ready** — `explore` discovers APIs, `synthesize` generates adapters, `cascade` finds auth strategies.
 - **Self-healing setup** — `opencli setup` auto-discovers tokens; `opencli doctor` diagnoses config across 10+ tools; `--fix` repairs them all.
@@ -39,66 +44,25 @@ A CLI tool that turns **any website** into a command-line interface — Bilibili
 
 ## Prerequisites
 
-- **Node.js**: >= 18.0.0
+- **Node.js**: >= 20.0.0
 - **Chrome** running **and logged into the target site** (e.g. bilibili.com, zhihu.com, xiaohongshu.com).
 
 > **⚠️ Important**: Browser commands reuse your Chrome login session. You must be logged into the target website in Chrome before running commands. If you get empty data or errors, check your login status first.
 
-OpenCLI connects to your browser through the Playwright MCP Bridge extension.
-It prefers an existing local/global `@playwright/mcp` install and falls back to `npx -y @playwright/mcp@latest` automatically when no local MCP server is found.
+OpenCLI connects to your browser through a lightweight **Browser Bridge** Chrome Extension + micro-daemon (zero config, auto-start).
 
-### Playwright MCP Bridge Extension Setup
+### Browser Bridge Extension Setup
 
-1. Install **[Playwright MCP Bridge](https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm)** extension in Chrome.
-2. Run `opencli setup` — discovers the token, distributes it to your tools, and verifies connectivity:
+1. Install the **opencli Browser Bridge** extension in Chrome:
+   - Open `chrome://extensions`, enable **Developer mode** (top-right toggle)
+   - Click **Load unpacked**, select the `extension/` folder from this repo
+2. That's it! The daemon auto-starts when you run any browser command. No tokens, no manual configuration.
 
-```bash
-opencli setup
-```
-
-The interactive TUI will:
-- 🔍 Auto-discover `PLAYWRIGHT_MCP_EXTENSION_TOKEN` from Chrome (no manual copy needed)
-- ☑️ Show all detected tools (Codex, Cursor, Claude Code, Gemini CLI, etc.)
-- ✏️ Update only the files you select (Space to toggle, Enter to confirm)
-- 🔌 Auto-verify browser connectivity after writing configs
-
-> **Tip**: Use `opencli doctor` for ongoing diagnosis and maintenance:
+> **Tip**: Use `opencli doctor` for ongoing diagnosis:
 > ```bash
-> opencli doctor            # Read-only token & config diagnosis
-> opencli doctor --live     # Also test live browser connectivity
-> opencli doctor --fix      # Fix mismatched configs (interactive)
-> opencli doctor --fix -y   # Fix all configs non-interactively
+> opencli doctor            # Check extension + daemon connectivity
+> opencli doctor --live     # Also test live browser commands
 > ```
-
-**Alternative: CDP Mode (For Servers/Headless)**
-If you cannot install the browser extension (e.g. running OpenCLI on a remote headless server), you can connect OpenCLI to your local Chrome via CDP using SSH tunnels or reverse proxies. See the [CDP Connection Guide](./CDP.md) for detailed instructions.
-
-<details>
-<summary>Manual setup (alternative)</summary>
-
-Add token to your MCP client config (e.g. Claude/Cursor):
-
-```json
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest", "--extension"],
-      "env": {
-        "PLAYWRIGHT_MCP_EXTENSION_TOKEN": "<your-token-here>"
-      }
-    }
-  }
-}
-```
-
-Export in shell (e.g. `~/.zshrc`):
-
-```bash
-export PLAYWRIGHT_MCP_EXTENSION_TOKEN="<your-token-here>"
-```
-
-</details>
 
 ## Quick Start
 
@@ -106,7 +70,6 @@ export PLAYWRIGHT_MCP_EXTENSION_TOKEN="<your-token-here>"
 
 ```bash
 npm install -g @jackwener/opencli
-opencli setup   # One-time: configure Playwright MCP token
 ```
 
 Then use directly:
@@ -139,29 +102,100 @@ npm install -g @jackwener/opencli@latest
 
 ## Built-in Commands
 
-**19 sites · 80+ commands** — run `opencli list` for the live registry.
+Run `opencli list` for the live registry.
 
-| Site | Commands | Count | Mode |
-|------|----------|:-----:|------|
-| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` | 18 | 🔐 Browser |
-| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 15 | 🔐 Browser |
-| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` | 11 | 🔐 Browser |
-| **v2ex** | `hot` `latest` `topic` `daily` `me` `notifications` | 6 | 🌐 / 🔐 |
-| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` | 6 | 🔐 Browser |
-| **xiaohongshu** | `search` `notifications` `feed` `me` `user` | 5 | 🔐 Browser |
-| **youtube** | `search` `video` `transcript` | 3 | 🔐 Browser |
-| **zhihu** | `hot` `search` `question` | 3 | 🔐 Browser |
-| **boss** | `search` `detail` | 2 | 🔐 Browser |
-| **coupang** | `search` `add-to-cart` | 2 | 🔐 Browser |
-| **bbc** | `news` | 1 | 🌐 Public |
-| **ctrip** | `search` | 1 | 🔐 Browser |
-| **github** | `search` | 1 | 🌐 Public |
-| **hackernews** | `top` | 1 | 🌐 Public |
-| **linkedin** | `search` | 1 | 🔐 Browser |
-| **reuters** | `search` | 1 | 🔐 Browser |
-| **smzdm** | `search` | 1 | 🔐 Browser |
-| **weibo** | `hot` | 1 | 🔐 Browser |
-| **yahoo-finance** | `quote` | 1 | 🔐 Browser |
+| Site | Commands | Mode |
+|------|----------|------|
+| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` | 🔐 Browser |
+| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 🔐 Browser |
+| **cursor** | `status` `send` `read` `new` `dump` `composer` `model` `extract-code` `ask` `screenshot` `history` `export` | 🖥️ Desktop |
+| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` `download` | 🔐 Browser |
+| **codex** | `status` `send` `read` `new` `extract-diff` `model` `ask` `screenshot` `history` `export` | 🖥️ Desktop |
+| **chatwise** | `status` `new` `send` `read` `ask` `model` `history` `export` `screenshot` | 🖥️ Desktop |
+| **notion** | `status` `search` `read` `new` `write` `sidebar` `favorites` `export` | 🖥️ Desktop |
+| **discord-app** | `status` `send` `read` `channels` `servers` `search` `members` | 🖥️ Desktop |
+| **v2ex** | `hot` `latest` `topic` `daily` `me` `notifications` | 🌐 / 🔐 |
+| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` | 🔐 Browser |
+| **antigravity** | `status` `send` `read` `new` `evaluate` | 🖥️ Desktop |
+| **chatgpt** | `status` `new` `send` `read` `ask` | 🖥️ Desktop |
+| **xiaohongshu** | `search` `notifications` `feed` `me` `user` `download` | 🔐 Browser |
+| **apple-podcasts** | `search` `episodes` `top` | 🌐 Public |
+| **xiaoyuzhou** | `podcast` `podcast-episodes` `episode` | 🌐 Public |
+| **zhihu** | `hot` `search` `question` `download` | 🔐 Browser |
+| **youtube** | `search` `video` `transcript` | 🔐 Browser |
+| **boss** | `search` `detail` | 🔐 Browser |
+| **coupang** | `search` `add-to-cart` | 🔐 Browser |
+| **bbc** | `news` | 🌐 Public |
+| **ctrip** | `search` | 🔐 Browser |
+| **github** | `search` | 🌐 Public |
+| **hackernews** | `top` | 🌐 Public |
+| **linkedin** | `search` | 🔐 Browser |
+| **reuters** | `search` | 🔐 Browser |
+| **smzdm** | `search` | 🔐 Browser |
+| **weibo** | `hot` | 🔐 Browser |
+| **yahoo-finance** | `quote` | 🔐 Browser |
+
+## Download Support
+
+OpenCLI supports downloading images, videos, and articles from supported platforms.
+
+### Supported Platforms
+
+| Platform | Content Types | Notes |
+|----------|---------------|-------|
+| **xiaohongshu** | Images, Videos | Downloads all media from a note |
+| **bilibili** | Videos | Requires `yt-dlp` installed |
+| **twitter** | Images, Videos | Downloads from user media tab or single tweet |
+| **zhihu** | Articles (Markdown) | Exports articles with optional image download |
+
+### Prerequisites
+
+For video downloads from streaming platforms, you need to install `yt-dlp`:
+
+```bash
+# Install yt-dlp
+pip install yt-dlp
+# or
+brew install yt-dlp
+```
+
+### Usage Examples
+
+```bash
+# Download images/videos from Xiaohongshu note
+opencli xiaohongshu download --note-id abc123 --output ./xhs
+
+# Download Bilibili video (requires yt-dlp)
+opencli bilibili download --bvid BV1xxx --output ./bilibili
+opencli bilibili download --bvid BV1xxx --quality 1080p  # Specify quality
+
+# Download Twitter media from user
+opencli twitter download --username elonmusk --limit 20 --output ./twitter
+
+# Download single tweet media
+opencli twitter download --tweet-url "https://x.com/user/status/123" --output ./twitter
+
+# Export Zhihu article to Markdown
+opencli zhihu download --url "https://zhuanlan.zhihu.com/p/xxx" --output ./zhihu
+
+# Export with local images
+opencli zhihu download --url "https://zhuanlan.zhihu.com/p/xxx" --download-images
+```
+
+### Pipeline Step (for YAML adapters)
+
+The `download` step can be used in YAML pipelines:
+
+```yaml
+pipeline:
+  - fetch: https://api.example.com/media
+  - download:
+      url: ${{ item.imageUrl }}
+      dir: ./downloads
+      filename: ${{ item.title | sanitize }}.jpg
+      concurrency: 5
+      skip_existing: true
+```
 
 ## Output Formats
 
@@ -206,7 +240,7 @@ Explore outputs to `.opencli/explore/<site>/` (manifest.json, endpoints.json, ca
 
 See **[TESTING.md](./TESTING.md)** for the full testing guide, including:
 
-- Current test coverage (unit + E2E tests across 19 sites)
+- Current test coverage (unit + E2E tests across browser and desktop adapters)
 - How to run tests locally
 - How to add tests when creating new adapters
 - CI/CD pipeline with sharding
@@ -222,15 +256,15 @@ npx vitest run tests/e2e/                    # E2E tests
 
 ## Troubleshooting
 
-- **"Failed to connect to Playwright MCP Bridge"**
-  - Ensure the Playwright MCP extension is installed and **enabled** in your running Chrome.
-  - Restart the Chrome browser if you just installed the extension.
+- **"Extension not connected"**
+  - Ensure the opencli Browser Bridge extension is installed and **enabled** in `chrome://extensions`.
 - **Empty data returns or 'Unauthorized' error**
-  - Your login session in Chrome might have expired. Open a normal Chrome tab, navigate to the target site, and log in or refresh the page to prove you are human.
+  - Your login session in Chrome might have expired. Open a normal Chrome tab, navigate to the target site, and log in or refresh the page.
 - **Node API errors**
-  - Make sure you are using Node.js >= 18. Some dependencies require modern Node APIs.
-- **Token issues**
-  - Run `opencli doctor` to diagnose token configuration across all tools.
+  - Make sure you are using Node.js >= 20. Some dependencies require modern Node APIs.
+- **Daemon issues**
+  - Check daemon status: `curl localhost:19825/status`
+  - View extension logs: `curl localhost:19825/logs`
 
 ## Releasing New Versions
 

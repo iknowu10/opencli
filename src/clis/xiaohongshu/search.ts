@@ -43,7 +43,7 @@ cli({
           const linkEl = el.querySelector('a[href*="/explore/"], a[href*="/search_result/"], a[href*="/note/"]');
 
           const href = linkEl?.getAttribute('href') || '';
-          const noteId = href.match(/\\/(?:explore|note)\\/([a-f0-9]+)/)?.[1] || '';
+          const noteId = href.match(/\\/(?:explore|note)\\/([a-zA-Z0-9]+)/)?.[1] || '';
 
           results.push({
             title: (titleEl?.textContent || '').trim(),

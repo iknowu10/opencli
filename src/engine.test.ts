@@ -14,6 +14,23 @@ describe('discoverClis', () => {
 });
 
 describe('executeCommand', () => {
+  it('accepts kebab-case option names after Commander camelCases them', async () => {
+    const cmd = cli({
+      site: 'test-engine',
+      name: 'kebab-arg-test',
+      description: 'test command with kebab-case arg',
+      browser: false,
+      strategy: Strategy.PUBLIC,
+      args: [
+        { name: 'note-id', required: true, help: 'Note ID' },
+      ],
+      func: async (_page, kwargs) => [{ noteId: kwargs['note-id'] }],
+    });
+
+    const result = await executeCommand(cmd, null, { 'note-id': 'abc123' });
+    expect(result).toEqual([{ noteId: 'abc123' }]);
+  });
+
   it('executes a command with func', async () => {
     const cmd = cli({
       site: 'test-engine',

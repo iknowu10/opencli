@@ -5,7 +5,7 @@
 import type { IPage } from './types.js';
 
 export const DEFAULT_BROWSER_CONNECT_TIMEOUT = parseInt(process.env.OPENCLI_BROWSER_CONNECT_TIMEOUT ?? '30', 10);
-export const DEFAULT_BROWSER_COMMAND_TIMEOUT = parseInt(process.env.OPENCLI_BROWSER_COMMAND_TIMEOUT ?? '45', 10);
+export const DEFAULT_BROWSER_COMMAND_TIMEOUT = parseInt(process.env.OPENCLI_BROWSER_COMMAND_TIMEOUT ?? '60', 10);
 export const DEFAULT_BROWSER_EXPLORE_TIMEOUT = parseInt(process.env.OPENCLI_BROWSER_EXPLORE_TIMEOUT ?? '120', 10);
 export const DEFAULT_BROWSER_SMOKE_TIMEOUT = parseInt(process.env.OPENCLI_BROWSER_SMOKE_TIMEOUT ?? '60', 10);
 
@@ -32,7 +32,7 @@ export function withTimeoutMs<T>(promise: Promise<T>, timeoutMs: number, message
   });
 }
 
-/** Interface for browser factory (PlaywrightMCP or test mocks) */
+/** Interface for browser factory (BrowserBridge or test mocks) */
 export interface IBrowserFactory {
   connect(opts?: { timeout?: number }): Promise<IPage>;
   close(): Promise<void>;

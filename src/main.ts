@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { discoverClis, executeCommand } from './engine.js';
-import { type CliCommand, fullName, getRegistry, strategyLabel } from './registry.js';
+import { Strategy, type CliCommand, fullName, getRegistry, strategyLabel } from './registry.js';
 import { render as renderOutput } from './output.js';
 import { PlaywrightMCP } from './browser/index.js';
 import { browserSession, DEFAULT_BROWSER_COMMAND_TIMEOUT, runWithTimeout } from './runtime.js';
@@ -129,36 +129,19 @@ program.command('cascade').description('Strategy cascade: find simplest working 
   });
 
 program.command('doctor')
-  .description('Diagnose Playwright MCP Bridge, token consistency, and Chrome remote debugging')
-  .option('--fix', 'Apply suggested fixes to shell rc and detected MCP configs', false)
-  .option('-y, --yes', 'Skip confirmation prompts when applying fixes', false)
-  .option('--token <token>', 'Override token to write instead of auto-detecting')
+  .description('Diagnose opencli browser bridge connectivity')
   .option('--live', 'Test browser connectivity (requires Chrome running)', false)
-  .option('--shell-rc <path>', 'Shell startup file to update')
-  .option('--mcp-config <paths>', 'Comma-separated MCP config paths to scan/update')
   .action(async (opts) => {
-    const { runBrowserDoctor, renderBrowserDoctorReport, applyBrowserDoctorFix } = await import('./doctor.js');
-    const configPaths = opts.mcpConfig ? String(opts.mcpConfig).split(',').map((s: string) => s.trim()).filter(Boolean) : undefined;
-    const report = await runBrowserDoctor({ token: opts.token, live: opts.live, shellRc: opts.shellRc, configPaths, cliVersion: PKG_VERSION });
+    const { runBrowserDoctor, renderBrowserDoctorReport } = await import('./doctor.js');
+    const report = await runBrowserDoctor({ live: opts.live, cliVersion: PKG_VERSION });
     console.log(renderBrowserDoctorReport(report));
-    if (opts.fix) {
-      const written = await applyBrowserDoctorFix(report, { fix: true, yes: opts.yes, token: opts.token, shellRc: opts.shellRc, configPaths });
-      console.log();
-      if (written.length > 0) {
-        console.log(chalk.green('Updated files:'));
-        for (const filePath of written) console.log(`- ${filePath}`);
-      } else {
-        console.log(chalk.yellow('No files were changed.'));
-      }
-    }
   });
 
 program.command('setup')
-  .description('Interactive setup: configure Playwright MCP token across all detected tools')
-  .option('--token <token>', 'Provide token directly instead of auto-detecting')
-  .action(async (opts) => {
+  .description('Interactive setup: verify browser bridge connectivity')
+  .action(async () => {
     const { runSetup } = await import('./setup.js');
-    await runSetup({ cliVersion: PKG_VERSION, token: opts.token });
+    await runSetup({ cliVersion: PKG_VERSION });
   });
 
 program.command('completion')
@@ -210,7 +193,8 @@ for (const [, cmd] of registry) {
     // Collect named options
     for (const arg of cmd.args) {
       if (arg.positional) continue;
-      const v = actionOpts[arg.name]; 
+      const camelName = arg.name.replace(/-([a-z])/g, (_m, ch: string) => ch.toUpperCase());
+      const v = actionOpts[arg.name] ?? actionOpts[camelName];
       if (v !== undefined) kwargs[arg.name] = v;
     }
 
@@ -218,7 +202,15 @@ for (const [, cmd] of registry) {
       if (actionOpts.verbose) process.env.OPENCLI_VERBOSE = '1';
       let result: any;
       if (cmd.browser) {
-        result = await browserSession(PlaywrightMCP, async (page) => runWithTimeout(executeCommand(cmd, page, kwargs, actionOpts.verbose), { timeout: cmd.timeoutSeconds ?? DEFAULT_BROWSER_COMMAND_TIMEOUT, label: fullName(cmd) }));
+        result = await browserSession(PlaywrightMCP, async (page) => {
+          // Cookie/header strategies require same-origin context for credentialed fetch.
+          // In CDP mode the active tab may be on an unrelated domain, causing CORS failures.
+          // Navigate to the command's domain first (mirrors cascade command behavior).
+          if ((cmd.strategy === Strategy.COOKIE || cmd.strategy === Strategy.HEADER) && cmd.domain) {
+            try { await page.goto(`https://${cmd.domain}`); await page.wait(2); } catch {}
+          }
+          return runWithTimeout(executeCommand(cmd, page, kwargs, actionOpts.verbose), { timeout: cmd.timeoutSeconds ?? DEFAULT_BROWSER_COMMAND_TIMEOUT, label: fullName(cmd) });
+        });
       } else { result = await executeCommand(cmd, null, kwargs, actionOpts.verbose); }
       if (actionOpts.verbose && (!result || (Array.isArray(result) && result.length === 0))) {
         console.error(chalk.yellow(`[Verbose] Warning: Command returned an empty result. If the website structural API changed or requires authentication, check the network or update the adapter.`));
