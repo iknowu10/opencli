@@ -11,10 +11,66 @@ function isExpectedChineseSiteRestriction(code: number, stderr: string): boolean
   return /Error \[FETCH_ERROR\]: HTTP (403|429|451|503)\b/.test(stderr);
 }
 
+function isExpectedApplePodcastsRestriction(code: number, stderr: string): boolean {
+  if (code === 0) return false;
+  return /Error \[FETCH_ERROR\]: (Charts API HTTP \d+|Unable to reach Apple Podcasts charts)/.test(stderr);
+}
+
+function isExpectedGoogleRestriction(code: number, stderr: string): boolean {
+  if (code === 0) return false;
+  // Network unreachable (DNS/proxy) or HTTP error from Google
+  return /fetch failed/.test(stderr) || /Error \[FETCH_ERROR\]: HTTP (403|429|451|503)\b/.test(stderr);
+}
+
 // Keep old name as alias for existing tests
 const isExpectedXiaoyuzhouRestriction = isExpectedChineseSiteRestriction;
 
 describe('public commands E2E', () => {
+  // ── bloomberg (RSS-backed, browser: false) ──
+  it('bloomberg main returns structured headline data', async () => {
+    const { stdout, code } = await runCli(['bloomberg', 'main', '--limit', '1', '-f', 'json']);
+    expect(code).toBe(0);
+    const data = parseJsonOutput(stdout);
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBe(1);
+    expect(data[0]).toHaveProperty('title');
+    expect(data[0]).toHaveProperty('summary');
+    expect(data[0]).toHaveProperty('link');
+    expect(data[0]).toHaveProperty('mediaLinks');
+    expect(Array.isArray(data[0].mediaLinks)).toBe(true);
+  }, 30_000);
+
+  it.each(['markets', 'economics', 'industries', 'tech', 'politics', 'businessweek', 'opinions'])(
+    'bloomberg %s returns structured RSS items',
+    async (section) => {
+      const { stdout, code } = await runCli(['bloomberg', section, '--limit', '1', '-f', 'json']);
+      expect(code).toBe(0);
+      const data = parseJsonOutput(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBe(1);
+      expect(data[0]).toHaveProperty('title');
+      expect(data[0]).toHaveProperty('summary');
+      expect(data[0]).toHaveProperty('link');
+      expect(data[0]).toHaveProperty('mediaLinks');
+    },
+    30_000,
+  );
+
+  it('bloomberg feeds lists the supported RSS aliases', async () => {
+    const { stdout, code } = await runCli(['bloomberg', 'feeds', '-f', 'json']);
+    expect(code).toBe(0);
+    const data = parseJsonOutput(stdout);
+    expect(Array.isArray(data)).toBe(true);
+    expect(data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'main' }),
+        expect.objectContaining({ name: 'markets' }),
+        expect.objectContaining({ name: 'tech' }),
+        expect.objectContaining({ name: 'opinions' }),
+      ]),
+    );
+  }, 30_000);
+
   // ── apple-podcasts ──
   it('apple-podcasts search returns structured podcast results', async () => {
     const { stdout, code } = await runCli(['apple-podcasts', 'search', 'technology', '--limit', '3', '-f', 'json']);
@@ -39,7 +95,11 @@ describe('public commands E2E', () => {
   }, 30_000);
 
   it('apple-podcasts top returns ranked podcasts', async () => {
-    const { stdout, code } = await runCli(['apple-podcasts', 'top', '--limit', '3', '--country', 'us', '-f', 'json']);
+    const { stdout, stderr, code } = await runCli(['apple-podcasts', 'top', '--limit', '3', '--country', 'us', '-f', 'json']);
+    if (isExpectedApplePodcastsRestriction(code, stderr)) {
+      console.warn(`apple-podcasts top skipped: ${stderr.trim()}`);
+      return;
+    }
     expect(code).toBe(0);
     const data = parseJsonOutput(stdout);
     expect(Array.isArray(data)).toBe(true);
@@ -151,6 +211,64 @@ describe('public commands E2E', () => {
     }
     expect(code).not.toBe(0);
     expect(stderr).toMatch(/limit must be a positive integer|Argument "limit" must be a valid number/);
+  }, 30_000);
+
+  // ── google suggest (public JSON API) ──
+  it('google suggest returns suggestions', async () => {
+    const { stdout, stderr, code } = await runCli(['google', 'suggest', 'python', '-f', 'json']);
+    if (isExpectedGoogleRestriction(code, stderr)) {
+      console.warn(`google suggest skipped: ${stderr.trim()}`);
+      return;
+    }
+    expect(code).toBe(0);
+    const data = parseJsonOutput(stdout);
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBeGreaterThanOrEqual(1);
+    expect(data[0]).toHaveProperty('suggestion');
+  }, 30_000);
+
+  // ── google news (public RSS) ──
+  it('google news returns headlines', async () => {
+    const { stdout, stderr, code } = await runCli(['google', 'news', '--limit', '3', '-f', 'json']);
+    if (isExpectedGoogleRestriction(code, stderr)) {
+      console.warn(`google news skipped: ${stderr.trim()}`);
+      return;
+    }
+    expect(code).toBe(0);
+    const data = parseJsonOutput(stdout);
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBeGreaterThanOrEqual(1);
+    expect(data[0]).toHaveProperty('title');
+    expect(data[0]).toHaveProperty('source');
+    expect(data[0]).toHaveProperty('url');
+  }, 30_000);
+
+  it('google news search returns results', async () => {
+    const { stdout, stderr, code } = await runCli(['google', 'news', 'AI', '--limit', '3', '-f', 'json']);
+    if (isExpectedGoogleRestriction(code, stderr)) {
+      console.warn(`google news search skipped: ${stderr.trim()}`);
+      return;
+    }
+    expect(code).toBe(0);
+    const data = parseJsonOutput(stdout);
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBeGreaterThanOrEqual(1);
+    expect(data[0]).toHaveProperty('title');
+  }, 30_000);
+
+  // ── google trends (public RSS) ──
+  it('google trends returns trending searches', async () => {
+    const { stdout, stderr, code } = await runCli(['google', 'trends', '--region', 'US', '--limit', '3', '-f', 'json']);
+    if (isExpectedGoogleRestriction(code, stderr)) {
+      console.warn(`google trends skipped: ${stderr.trim()}`);
+      return;
+    }
+    expect(code).toBe(0);
+    const data = parseJsonOutput(stdout);
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBeGreaterThanOrEqual(1);
+    expect(data[0]).toHaveProperty('title');
+    expect(data[0]).toHaveProperty('traffic');
   }, 30_000);
 
   // ── weread (Chinese site — may return empty on overseas CI runners) ──

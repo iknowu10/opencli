@@ -11,13 +11,26 @@
  */
 
 import { formatSnapshot } from '../snapshotFormatter.js';
-import type { IPage } from '../types.js';
+import type { BrowserCookie, IPage, ScreenshotOptions, SnapshotOptions, WaitOptions } from '../types.js';
 import { sendCommand } from './daemon-client.js';
+import { wrapForEval } from './utils.js';
+import { generateSnapshotJs, scrollToRefJs, getFormStateJs } from './dom-snapshot.js';
+import {
+  clickJs,
+  typeTextJs,
+  pressKeyJs,
+  waitForTextJs,
+  scrollJs,
+  autoScrollJs,
+  networkRequestsJs,
+} from './dom-helpers.js';
 
 /**
  * Page — implements IPage by talking to the daemon via HTTP.
  */
 export class Page implements IPage {
+  constructor(private readonly workspace: string = 'default') {}
+
   /** Active tab ID, set after navigate and used in all subsequent commands */
   private _tabId: number | undefined;
 
@@ -26,23 +39,71 @@ export class Page implements IPage {
     return this._tabId !== undefined ? { tabId: this._tabId } : {};
   }
 
-  async goto(url: string): Promise<void> {
+  private _workspaceOpt(): { workspace: string } {
+    return { workspace: this.workspace };
+  }
+
+  async goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void> {
     const result = await sendCommand('navigate', {
       url,
+      ...this._workspaceOpt(),
       ...this._tabOpt(),
     }) as { tabId?: number };
     // Remember the tabId for subsequent exec calls
     if (result?.tabId) {
       this._tabId = result.tabId;
     }
+    // Post-load settle: the extension already waits for tab.status === 'complete',
+    // but SPA frameworks (React/Vue) need extra time to render after DOM load.
+    if (options?.waitUntil !== 'none') {
+      const settleMs = options?.settleMs ?? 1000;
+      await new Promise(resolve => setTimeout(resolve, settleMs));
+    }
   }
 
-  async evaluate(js: string): Promise<any> {
+  /** Close the automation window in the extension */
+  async closeWindow(): Promise<void> {
+    try {
+      await sendCommand('close-window', { ...this._workspaceOpt() });
+    } catch {
+      // Window may already be closed or daemon may be down
+    }
+  }
+
+  async evaluate(js: string): Promise<unknown> {
     const code = wrapForEval(js);
-    return sendCommand('exec', { code, ...this._tabOpt() });
+    return sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
-  async snapshot(opts: { interactive?: boolean; compact?: boolean; maxDepth?: number; raw?: boolean } = {}): Promise<any> {
+  async getCookies(opts: { domain?: string; url?: string } = {}): Promise<BrowserCookie[]> {
+    const result = await sendCommand('cookies', { ...this._workspaceOpt(), ...opts });
+    return Array.isArray(result) ? result : [];
+  }
+
+  async snapshot(opts: SnapshotOptions = {}): Promise<unknown> {
+    // Primary: use the advanced DOM snapshot engine with multi-layer pruning
+    const snapshotJs = generateSnapshotJs({
+      viewportExpand: opts.viewportExpand ?? 800,
+      maxDepth: Math.max(1, Math.min(Number(opts.maxDepth) || 50, 200)),
+      interactiveOnly: opts.interactive ?? false,
+      maxTextLength: opts.maxTextLength ?? 120,
+      includeScrollInfo: true,
+      bboxDedup: true,
+    });
+
+    try {
+      const result = await sendCommand('exec', { code: snapshotJs, ...this._workspaceOpt(), ...this._tabOpt() });
+      // The advanced engine already produces a clean, pruned, LLM-friendly output.
+      // Do NOT pass through formatSnapshot — its format is incompatible.
+      return result;
+    } catch {
+      // Fallback: basic DOM snapshot (original implementation)
+      return this._basicSnapshot(opts);
+    }
+  }
+
+  /** Fallback basic snapshot — original buildTree approach */
+  private async _basicSnapshot(opts: Pick<SnapshotOptions, 'interactive' | 'compact' | 'maxDepth' | 'raw'> = {}): Promise<unknown> {
     const maxDepth = Math.max(1, Math.min(Number(opts.maxDepth) || 50, 200));
     const code = `
       (async () => {
@@ -56,7 +117,7 @@ export class Page implements IPage {
 
           let indent = '  '.repeat(depth);
           let line = indent + role;
-          if (name) line += ' "' + name.replace(/"/g, '\\\\"') + '"';
+          if (name) line += ' "' + name.replace(/"/g, '\\\\\\"') + '"';
           if (node.tagName?.toLowerCase() === 'a' && node.href) line += ' [' + node.href + ']';
           if (node.tagName?.toLowerCase() === 'input') line += ' [' + (node.type || 'text') + ']';
 
@@ -71,60 +132,38 @@ export class Page implements IPage {
         return buildTree(document.body, 0);
       })()
     `;
-    const raw = await sendCommand('exec', { code, ...this._tabOpt() });
+    const raw = await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
     if (opts.raw) return raw;
     if (typeof raw === 'string') return formatSnapshot(raw, opts);
     return raw;
   }
 
   async click(ref: string): Promise<void> {
-    const safeRef = JSON.stringify(ref);
-    const code = `
-      (() => {
-        const ref = ${safeRef};
-        const el = document.querySelector('[data-ref="' + ref + '"]')
-          || document.querySelectorAll('a, button, input, [role="button"], [tabindex]')[parseInt(ref, 10) || 0];
-        if (!el) throw new Error('Element not found: ' + ref);
-        el.scrollIntoView({ behavior: 'instant', block: 'center' });
-        el.click();
-        return 'clicked';
-      })()
-    `;
-    await sendCommand('exec', { code, ...this._tabOpt() });
+    const code = clickJs(ref);
+    await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
   async typeText(ref: string, text: string): Promise<void> {
-    const safeRef = JSON.stringify(ref);
-    const safeText = JSON.stringify(text);
-    const code = `
-      (() => {
-        const ref = ${safeRef};
-        const el = document.querySelector('[data-ref="' + ref + '"]')
-          || document.querySelectorAll('input, textarea, [contenteditable]')[parseInt(ref, 10) || 0];
-        if (!el) throw new Error('Element not found: ' + ref);
-        el.focus();
-        el.value = ${safeText};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return 'typed';
-      })()
-    `;
-    await sendCommand('exec', { code, ...this._tabOpt() });
+    const code = typeTextJs(ref, text);
+    await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
   async pressKey(key: string): Promise<void> {
-    const code = `
-      (() => {
-        const el = document.activeElement || document.body;
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }));
-        el.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(key)}, bubbles: true }));
-        return 'pressed';
-      })()
-    `;
-    await sendCommand('exec', { code, ...this._tabOpt() });
+    const code = pressKeyJs(key);
+    await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
-  async wait(options: number | { text?: string; time?: number; timeout?: number }): Promise<void> {
+  async scrollTo(ref: string): Promise<unknown> {
+    const code = scrollToRefJs(ref);
+    return sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
+  }
+
+  async getFormState(): Promise<Record<string, unknown>> {
+    const code = getFormStateJs();
+    return (await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() })) as Record<string, unknown>;
+  }
+
+  async wait(options: number | WaitOptions): Promise<void> {
     if (typeof options === 'number') {
       await new Promise(resolve => setTimeout(resolve, options * 1000));
       return;
@@ -135,52 +174,32 @@ export class Page implements IPage {
     }
     if (options.text) {
       const timeout = (options.timeout ?? 30) * 1000;
-      const code = `
-        new Promise((resolve, reject) => {
-          const deadline = Date.now() + ${timeout};
-          const check = () => {
-            if (document.body.innerText.includes(${JSON.stringify(options.text)})) return resolve('found');
-            if (Date.now() > deadline) return reject(new Error('Text not found: ' + ${JSON.stringify(options.text)}));
-            setTimeout(check, 200);
-          };
-          check();
-        })
-      `;
-      await sendCommand('exec', { code, ...this._tabOpt() });
+      const code = waitForTextJs(options.text, timeout);
+      await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
     }
   }
 
-  async tabs(): Promise<any> {
-    return sendCommand('tabs', { op: 'list' });
+  async tabs(): Promise<unknown[]> {
+    const result = await sendCommand('tabs', { op: 'list', ...this._workspaceOpt() });
+    return Array.isArray(result) ? result : [];
   }
 
   async closeTab(index?: number): Promise<void> {
-    await sendCommand('tabs', { op: 'close', ...(index !== undefined ? { index } : {}) });
+    await sendCommand('tabs', { op: 'close', ...this._workspaceOpt(), ...(index !== undefined ? { index } : {}) });
   }
 
   async newTab(): Promise<void> {
-    await sendCommand('tabs', { op: 'new' });
+    await sendCommand('tabs', { op: 'new', ...this._workspaceOpt() });
   }
 
   async selectTab(index: number): Promise<void> {
-    await sendCommand('tabs', { op: 'select', index });
+    await sendCommand('tabs', { op: 'select', index, ...this._workspaceOpt() });
   }
 
-  async networkRequests(includeStatic: boolean = false): Promise<any> {
-    const code = `
-      (() => {
-        const entries = performance.getEntriesByType('resource');
-        return entries
-          ${includeStatic ? '' : '.filter(e => !["img", "font", "css", "script"].some(t => e.initiatorType === t))'}
-          .map(e => ({
-            url: e.name,
-            type: e.initiatorType,
-            duration: Math.round(e.duration),
-            size: e.transferSize || 0,
-          }));
-      })()
-    `;
-    return sendCommand('exec', { code, ...this._tabOpt() });
+  async networkRequests(includeStatic: boolean = false): Promise<unknown[]> {
+    const code = networkRequestsJs(includeStatic);
+    const result = await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
+    return Array.isArray(result) ? result : [];
   }
 
   /**
@@ -188,7 +207,7 @@ export class Page implements IPage {
    * Would require CDP Runtime.consoleAPICalled event listener.
    * @returns Always returns empty array.
    */
-  async consoleMessages(_level: string = 'info'): Promise<any> {
+  async consoleMessages(_level: string = 'info'): Promise<unknown[]> {
     return [];
   }
 
@@ -199,13 +218,9 @@ export class Page implements IPage {
    * @param options.fullPage - capture full scrollable page
    * @param options.path - save to file path (returns base64 if omitted)
    */
-  async screenshot(options: {
-    format?: 'png' | 'jpeg';
-    quality?: number;
-    fullPage?: boolean;
-    path?: string;
-  } = {}): Promise<string> {
+  async screenshot(options: ScreenshotOptions = {}): Promise<string> {
     const base64 = await sendCommand('screenshot', {
+      ...this._workspaceOpt(),
       format: options.format,
       quality: options.quality,
       fullPage: options.fullPage,
@@ -216,90 +231,41 @@ export class Page implements IPage {
       const fs = await import('node:fs');
       const path = await import('node:path');
       const dir = path.dirname(options.path);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(options.path, Buffer.from(base64, 'base64'));
+      await fs.promises.mkdir(dir, { recursive: true });
+      await fs.promises.writeFile(options.path, Buffer.from(base64, 'base64'));
     }
 
     return base64;
   }
 
   async scroll(direction: string = 'down', amount: number = 500): Promise<void> {
-    const dx = direction === 'left' ? -amount : direction === 'right' ? amount : 0;
-    const dy = direction === 'up' ? -amount : direction === 'down' ? amount : 0;
-    await sendCommand('exec', {
-      code: `window.scrollBy(${dx}, ${dy})`,
-      ...this._tabOpt(),
-    });
+    const code = scrollJs(direction, amount);
+    await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
   async autoScroll(options: { times?: number; delayMs?: number } = {}): Promise<void> {
     const times = options.times ?? 3;
     const delayMs = options.delayMs ?? 2000;
-    const code = `
-      (async () => {
-        for (let i = 0; i < ${times}; i++) {
-          const lastHeight = document.body.scrollHeight;
-          window.scrollTo(0, lastHeight);
-          await new Promise(resolve => {
-            let timeoutId;
-            const observer = new MutationObserver(() => {
-              if (document.body.scrollHeight > lastHeight) {
-                clearTimeout(timeoutId);
-                observer.disconnect();
-                setTimeout(resolve, 100);
-              }
-            });
-            observer.observe(document.body, { childList: true, subtree: true });
-            timeoutId = setTimeout(() => { observer.disconnect(); resolve(null); }, ${delayMs});
-          });
-        }
-      })()
-    `;
-    await sendCommand('exec', { code, ...this._tabOpt() });
+    const code = autoScrollJs(times, delayMs);
+    await sendCommand('exec', { code, ...this._workspaceOpt(), ...this._tabOpt() });
   }
 
   async installInterceptor(pattern: string): Promise<void> {
     const { generateInterceptorJs } = await import('../interceptor.js');
-    await sendCommand('exec', {
-      code: generateInterceptorJs(JSON.stringify(pattern), {
-        arrayName: '__opencli_xhr',
-        patchGuard: '__opencli_interceptor_patched',
-      }),
-      ...this._tabOpt(),
-    });
+    // Must use evaluate() so wrapForEval() converts the arrow function into an IIFE;
+    // sendCommand('exec') sends the code as-is, and CDP never executes a bare arrow.
+    await this.evaluate(generateInterceptorJs(JSON.stringify(pattern), {
+      arrayName: '__opencli_xhr',
+      patchGuard: '__opencli_interceptor_patched',
+    }));
   }
 
-  async getInterceptedRequests(): Promise<any[]> {
+  async getInterceptedRequests(): Promise<unknown[]> {
     const { generateReadInterceptedJs } = await import('../interceptor.js');
-    const result = await sendCommand('exec', {
-      code: generateReadInterceptedJs('__opencli_xhr'),
-      ...this._tabOpt(),
-    });
-    return (result as any[]) || [];
+    // Same as installInterceptor: must go through evaluate() for IIFE wrapping
+    const result = await this.evaluate(generateReadInterceptedJs('__opencli_xhr'));
+    return Array.isArray(result) ? result : [];
   }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────
-
-/**
- * Wrap JS code for CDP Runtime.evaluate:
- * - Already an IIFE `(...)()` → send as-is
- * - Arrow/function literal → wrap as IIFE `(code)()`
- * - `new Promise(...)` or raw expression → send as-is (expression)
- */
-function wrapForEval(js: string): string {
-  const code = js.trim();
-  if (!code) return 'undefined';
-
-  // Already an IIFE: `(async () => { ... })()` or `(function() {...})()`
-  if (/^\([\s\S]*\)\s*\(.*\)\s*$/.test(code)) return code;
-
-  // Arrow function: `() => ...` or `async () => ...`
-  if (/^(async\s+)?(\([^)]*\)|[A-Za-z_]\w*)\s*=>/.test(code)) return `(${code})()`;
-
-  // Function declaration: `function ...` or `async function ...`
-  if (/^(async\s+)?function[\s(]/.test(code)) return `(${code})()`;
-
-  // Everything else: bare expression, `new Promise(...)`, etc. → evaluate directly
-  return code;
-}
+// (End of file)

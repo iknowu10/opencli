@@ -17,6 +17,11 @@ The agent must configure the endpoint environment variable locally before invoki
 export OPENCLI_CDP_ENDPOINT="http://127.0.0.1:9224"
 \`\`\`
 
+If the endpoint exposes multiple inspectable targets, also set:
+\`\`\`bash
+export OPENCLI_CDP_TARGET="antigravity"
+\`\`\`
+
 ## High-Level Capabilities
 1. **Send Messages (`opencli antigravity send <message>`)**: Type and send a message directly into the chat UI.
 2. **Read History (`opencli antigravity read`)**: Scrape the raw chat transcript from the main UI container.

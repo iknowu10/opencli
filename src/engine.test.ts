@@ -1,15 +1,89 @@
-/**
- * Tests for engine.ts: CLI discovery and command execution.
- */
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { discoverClis, executeCommand } from './engine.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { discoverClis, discoverPlugins, PLUGINS_DIR } from './discovery.js';
+import { executeCommand } from './execution.js';
 import { getRegistry, cli, Strategy } from './registry.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 describe('discoverClis', () => {
   it('handles non-existent directories gracefully', async () => {
     // Should not throw for missing directories
     await expect(discoverClis('/tmp/nonexistent-opencli-test-dir')).resolves.not.toThrow();
+  });
+
+  it('imports only CLI command modules during filesystem discovery', async () => {
+    const tempRoot = await fs.promises.mkdtemp(path.join('/tmp', 'opencli-discovery-'));
+    const siteDir = path.join(tempRoot, 'temp-site');
+    const helperPath = path.join(siteDir, 'helper.ts');
+    const commandPath = path.join(siteDir, 'hello.ts');
+
+    try {
+      await fs.promises.mkdir(siteDir, { recursive: true });
+      await fs.promises.writeFile(helperPath, `
+globalThis.__opencli_helper_loaded__ = true;
+export const helper = true;
+`);
+      await fs.promises.writeFile(commandPath, `
+import { cli, Strategy } from '${path.join(process.cwd(), 'src', 'registry.ts')}';
+cli({
+  site: 'temp-site',
+  name: 'hello',
+  description: 'hello command',
+  strategy: Strategy.PUBLIC,
+  browser: false,
+  func: async () => [{ ok: true }],
+});
+`);
+
+      delete (globalThis as any).__opencli_helper_loaded__;
+      await discoverClis(tempRoot);
+
+      expect((globalThis as any).__opencli_helper_loaded__).toBeUndefined();
+      expect(getRegistry().get('temp-site/hello')).toBeDefined();
+    } finally {
+      delete (globalThis as any).__opencli_helper_loaded__;
+      await fs.promises.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('discoverPlugins', () => {
+  const testPluginDir = path.join(PLUGINS_DIR, '__test-plugin__');
+  const yamlPath = path.join(testPluginDir, 'greeting.yaml');
+
+  afterEach(async () => {
+    try { await fs.promises.rm(testPluginDir, { recursive: true }); } catch {}
+  });
+
+  it('discovers YAML plugins from ~/.opencli/plugins/', async () => {
+    // Create a simple YAML adapter in the plugins directory
+    await fs.promises.mkdir(testPluginDir, { recursive: true });
+    await fs.promises.writeFile(yamlPath, `
+site: __test-plugin__
+name: greeting
+description: Test plugin greeting
+strategy: public
+browser: false
+
+pipeline:
+  - evaluate: "() => [{ message: 'hello from plugin' }]"
+
+columns: [message]
+`);
+
+    await discoverPlugins();
+
+    const registry = getRegistry();
+    const cmd = registry.get('__test-plugin__/greeting');
+    expect(cmd).toBeDefined();
+    expect(cmd!.site).toBe('__test-plugin__');
+    expect(cmd!.name).toBe('greeting');
+    expect(cmd!.description).toBe('Test plugin greeting');
+  });
+
+  it('handles non-existent plugins directory gracefully', async () => {
+    // discoverPlugins should not throw if ~/.opencli/plugins/ does not exist
+    await expect(discoverPlugins()).resolves.not.toThrow();
   });
 });
 
@@ -27,7 +101,7 @@ describe('executeCommand', () => {
       func: async (_page, kwargs) => [{ noteId: kwargs['note-id'] }],
     });
 
-    const result = await executeCommand(cmd, null, { 'note-id': 'abc123' });
+    const result = await executeCommand(cmd, { 'note-id': 'abc123' });
     expect(result).toEqual([{ noteId: 'abc123' }]);
   });
 
@@ -43,7 +117,7 @@ describe('executeCommand', () => {
       },
     });
 
-    const result = await executeCommand(cmd, null, { query: 'hello' });
+    const result = await executeCommand(cmd, { query: 'hello' });
     expect(result).toEqual([{ title: 'hello' }]);
   });
 
@@ -61,7 +135,7 @@ describe('executeCommand', () => {
     });
 
     // Pipeline commands require page for evaluate step, so we'll test the error path
-    await expect(executeCommand(cmd, null, {})).rejects.toThrow();
+    await expect(executeCommand(cmd, {})).rejects.toThrow();
   });
 
   it('throws for command with no func or pipeline', async () => {
@@ -72,7 +146,7 @@ describe('executeCommand', () => {
       browser: false,
     });
 
-    await expect(executeCommand(cmd, null, {})).rejects.toThrow('has no func or pipeline');
+    await expect(executeCommand(cmd, {})).rejects.toThrow('has no func or pipeline');
   });
 
   it('passes debug flag to func', async () => {
@@ -88,7 +162,7 @@ describe('executeCommand', () => {
       },
     });
 
-    await executeCommand(cmd, null, {}, true);
+    await executeCommand(cmd, {}, true);
     expect(receivedDebug).toBe(true);
   });
 });

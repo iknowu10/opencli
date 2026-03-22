@@ -1,5 +1,5 @@
 import { cli, Strategy } from '../../registry.js';
-import { canonicalizeProductUrl, normalizeProductId } from '../../coupang.js';
+import { canonicalizeProductUrl, normalizeProductId } from './utils.js';
 
 function escapeJsString(value: string): string {
   return JSON.stringify(value);
@@ -102,12 +102,12 @@ cli({
   strategy: Strategy.COOKIE,
   browser: true,
   args: [
-    { name: 'productId', required: false, help: 'Coupang product ID' },
+    { name: 'product-id', required: false, help: 'Coupang product ID' },
     { name: 'url', required: false, help: 'Canonical product URL' },
   ],
   columns: ['ok', 'product_id', 'url', 'message'],
   func: async (page, kwargs) => {
-    const rawProductId = kwargs.productId ?? kwargs.product_id;
+    const rawProductId = kwargs['product-id'] ?? kwargs['product-id'];
     const productId = normalizeProductId(rawProductId);
     const targetUrl = canonicalizeProductUrl(kwargs.url, productId);
 
@@ -117,7 +117,6 @@ cli({
 
     const finalUrl = targetUrl || canonicalizeProductUrl('', productId);
     await page.goto(finalUrl);
-    await page.wait(3);
 
     const result = await page.evaluate(buildAddToCartEvaluate(productId));
     const loginHints = result?.loginHints ?? {};

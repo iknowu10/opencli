@@ -5,7 +5,7 @@
  * Everything else is just JS code sent via 'exec'.
  */
 
-export type Action = 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot';
+export type Action = 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions';
 
 export interface Command {
   /** Unique request ID */
@@ -16,6 +16,8 @@ export interface Command {
   tabId?: number;
   /** JS code to evaluate in page context (exec action) */
   code?: string;
+  /** Logical workspace for automation session reuse */
+  workspace?: string;
   /** URL to navigate to (navigate action) */
   url?: string;
   /** Sub-operation for tabs: list, new, close, select */

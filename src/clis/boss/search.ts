@@ -2,7 +2,7 @@
  * BOSS直聘 job search — browser cookie API.
  */
 import { cli, Strategy } from '../../registry.js';
-import type { IPage } from '../../types.js';
+import { requirePage, navigateTo, bossFetch, assertOk, verbose } from './common.js';
 
 /** City name → BOSS Zhipin city code mapping */
 const CITY_CODES: Record<string, string> = {
@@ -69,10 +69,10 @@ cli({
   description: 'BOSS直聘搜索职位',
   domain: 'www.zhipin.com',
   strategy: Strategy.COOKIE,
-
+  navigateBefore: false,
   browser: true,
   args: [
-    { name: 'query', required: true, help: 'Search keyword (e.g. AI agent, 前端)' },
+    { name: 'query', required: true, positional: true, help: 'Search keyword (e.g. AI agent, 前端)' },
     { name: 'city', default: '北京', help: 'City name or code (e.g. 杭州, 上海, 101010100)' },
     { name: 'experience', default: '', help: 'Experience: 应届/1年以内/1-3年/3-5年/5-10年/10年以上' },
     { name: 'degree', default: '', help: 'Degree: 大专/本科/硕士/博士' },
@@ -82,19 +82,13 @@ cli({
     { name: 'limit', type: 'int', default: 15, help: 'Number of results' },
   ],
   columns: ['name', 'salary', 'company', 'area', 'experience', 'degree', 'skills', 'boss', 'security_id', 'url'],
-  func: async (page: IPage | null, kwargs) => {
-    if (!page) throw new Error('Browser page required');
+  func: async (page, kwargs) => {
+    requirePage(page);
 
     const cityCode = resolveCity(kwargs.city);
-    
-    if (process.env.OPENCLI_VERBOSE || process.env.DEBUG?.includes('opencli')) {
-      console.error(`[opencli:boss] Navigating to set referrer context...`);
-    }
-    // Navigate to the Web search view first to establish proper referrer context
-    // This is a lesson learned from boss-cli: referrer is important
-    await page.goto(`https://www.zhipin.com/web/geek/job?query=${encodeURIComponent(kwargs.query)}&city=${cityCode}`);
-    
-    // Give the page a tiny bit of time to settle to avoid immediate 403s
+    verbose('Navigating to set referrer context...');
+
+    await navigateTo(page, `https://www.zhipin.com/web/geek/job?query=${encodeURIComponent(kwargs.query)}&city=${cityCode}`);
     await new Promise(r => setTimeout(r, 1000));
 
     const expVal = resolveMap(kwargs.experience, EXP_MAP);
@@ -109,7 +103,6 @@ cli({
 
     while (allJobs.length < limit) {
       if (allJobs.length > 0) {
-        // Human-like pause between page fetches (1-3 seconds)
         await new Promise(r => setTimeout(r, 1000 + Math.random() * 2000));
       }
 
@@ -126,62 +119,19 @@ cli({
       if (industryVal) qs.set('industry', industryVal);
 
       const targetUrl = `https://www.zhipin.com/wapi/zpgeek/search/joblist.json?${qs.toString()}`;
+      verbose(`Fetching page ${currentPage}... (current jobs: ${allJobs.length})`);
 
-      if (process.env.OPENCLI_VERBOSE || process.env.DEBUG?.includes('opencli')) {
-        console.error(`[opencli:boss] Fetching page ${currentPage}... (current jobs: ${allJobs.length})`);
-      }
-
-      const evaluateScript = `
-        async () => {
-          return new Promise((resolve, reject) => {
-            const xhr = new window.XMLHttpRequest();
-            xhr.open('GET', '${targetUrl}', true);
-            xhr.withCredentials = true;
-            xhr.timeout = 15000; // 15s timeout
-            xhr.setRequestHeader('Accept', 'application/json, text/plain, */*');
-            xhr.onload = () => {
-              if (xhr.status >= 200 && xhr.status < 300) {
-                try {
-                  resolve(JSON.parse(xhr.responseText));
-                } catch (e) {
-                  reject(new Error('Failed to parse JSON. Raw (200 chars): ' + xhr.responseText.substring(0, 200)));
-                }
-              } else {
-                reject(new Error('XHR HTTP Status: ' + xhr.status));
-              }
-            };
-            xhr.onerror = () => reject(new Error('XHR Network Error'));
-            xhr.ontimeout = () => reject(new Error('XHR Timeout'));
-            xhr.send();
-          });
-        }
-      `;
-
-      let data: any;
-      try {
-        data = await page.evaluate(evaluateScript);
-      } catch (e: any) {
-        throw new Error('API evaluate failed: ' + e.message);
-      }
-
-      if (data.code !== 0) {
-        if (data.code === 37) {
-           throw new Error('Cookie 已过期！请在当前 Chrome 浏览器中重新登录 BOSS 直聘。');
-        }
-        throw new Error(`BOSS API error: ${data.message || 'Unknown'} (code=${data.code})\nRaw data: ${JSON.stringify(data)}`);
-      }
+      const data = await bossFetch(page, targetUrl);
 
       const zpData = data.zpData || {};
       const batch = zpData.jobList || [];
-      if (batch.length === 0) {
-        break; // No more results
-      }
+      if (batch.length === 0) break;
 
       let addedInBatch = 0;
       for (const j of batch) {
         if (!j.encryptJobId || seenIds.has(j.encryptJobId)) continue;
         seenIds.add(j.encryptJobId);
-        
+
         allJobs.push({
           name: j.jobName,
           salary: j.salaryDesc,
@@ -199,14 +149,11 @@ cli({
       }
 
       if (addedInBatch === 0) {
-        // Boss API is repeating identical pages, we've hit the pagination limit
-        if (process.env.OPENCLI_VERBOSE) console.error(`[opencli:boss] API returned duplicate page, stopping pagination at ${allJobs.length} items`);
+        verbose(`API returned duplicate page, stopping pagination at ${allJobs.length} items`);
         break;
       }
 
-      if (!zpData.hasMore) {
-        break; // API says no more pages
-      }
+      if (!zpData.hasMore) break;
       currentPage++;
     }
 

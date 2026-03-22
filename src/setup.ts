@@ -8,7 +8,7 @@
 import chalk from 'chalk';
 import { checkDaemonStatus } from './browser/discover.js';
 import { checkConnectivity } from './doctor.js';
-import { PlaywrightMCP } from './browser/index.js';
+import { BrowserBridge } from './browser/index.js';
 
 export async function runSetup(opts: { cliVersion?: string; token?: string } = {}) {
   console.log();
@@ -27,7 +27,7 @@ export async function runSetup(opts: { cliVersion?: string; token?: string } = {
     console.log(chalk.dim('    Starting daemon now...'));
 
     // Try to spawn daemon
-    const mcp = new PlaywrightMCP();
+    const mcp = new BrowserBridge();
     try {
       await mcp.connect({ timeout: 5 });
       await mcp.close();

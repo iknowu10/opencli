@@ -1,15 +1,263 @@
 /**
  * Xiaohongshu Creator Note List — per-note metrics from the creator backend.
  *
- * Navigates to the note manager page and extracts per-note data from
- * the rendered DOM. This approach bypasses the v2 API signature requirement.
- *
- * Returns: note title, publish date, views, likes, collects, comments.
+ * In CDP mode we capture the real creator analytics API response so the list
+ * includes stable note ids and detail-page URLs. If that capture is unavailable,
+ * we fall back to the older interceptor and DOM parsing paths.
  *
  * Requires: logged into creator.xiaohongshu.com in Chrome.
  */
 
 import { cli, Strategy } from '../../registry.js';
+import type { IPage } from '../../types.js';
+
+const DATE_LINE_RE = /^发布于 (\d{4}年\d{2}月\d{2}日 \d{2}:\d{2})$/;
+const METRIC_LINE_RE = /^\d+$/;
+const VISIBILITY_LINE_RE = /可见$/;
+const NOTE_ANALYZE_API_PATH = '/api/galaxy/creator/datacenter/note/analyze/list';
+const NOTE_DETAIL_PAGE_URL = 'https://creator.xiaohongshu.com/statistics/note-detail';
+
+type CreatorNoteRow = {
+  id: string;
+  title: string;
+  date: string;
+  views: number;
+  likes: number;
+  collects: number;
+  comments: number;
+  url: string;
+};
+
+export type { CreatorNoteRow };
+
+type CreatorNoteDomCard = {
+  id: string;
+  title: string;
+  date: string;
+  metrics: number[];
+};
+
+type CreatorAnalyzeApiResponse = {
+  error?: string;
+  data?: {
+    note_infos?: Array<{
+      id?: string;
+      title?: string;
+      post_time?: number;
+      read_count?: number;
+      like_count?: number;
+      fav_count?: number;
+      comment_count?: number;
+    }>;
+    total?: number;
+  };
+};
+
+const NOTE_ID_HTML_RE = /&quot;noteId&quot;:&quot;([0-9a-f]{24})&quot;/g;
+
+function buildNoteDetailUrl(noteId?: string): string {
+  return noteId ? `${NOTE_DETAIL_PAGE_URL}?noteId=${encodeURIComponent(noteId)}` : '';
+}
+
+function formatPostTime(ts?: number): string {
+  if (!ts) return '';
+  // XHS API timestamps are Beijing time (UTC+8)
+  const date = new Date(ts + 8 * 3600_000);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}年${pad(date.getUTCMonth() + 1)}月${pad(date.getUTCDate())}日 ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+export function parseCreatorNotesText(bodyText: string): CreatorNoteRow[] {
+  const lines = bodyText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const results: CreatorNoteRow[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < lines.length; i++) {
+    const dateMatch = lines[i].match(DATE_LINE_RE);
+    if (!dateMatch) continue;
+
+    let titleIndex = i - 1;
+    while (titleIndex >= 0 && VISIBILITY_LINE_RE.test(lines[titleIndex])) titleIndex--;
+    if (titleIndex < 0) continue;
+
+    const title = lines[titleIndex];
+    const metrics: number[] = [];
+    let cursor = i + 1;
+
+    while (cursor < lines.length && METRIC_LINE_RE.test(lines[cursor]) && metrics.length < 5) {
+      metrics.push(parseInt(lines[cursor], 10));
+      cursor++;
+    }
+
+    if (metrics.length < 4) continue;
+
+    const key = `${title}@@${dateMatch[1]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    results.push({
+      id: '',
+      title,
+      date: dateMatch[1],
+      views: metrics[0] ?? 0,
+      likes: metrics[2] ?? 0,
+      collects: metrics[3] ?? 0,
+      comments: metrics[1] ?? 0,
+      url: '',
+    });
+
+    i = cursor - 1;
+  }
+
+  return results;
+}
+
+export function parseCreatorNoteIdsFromHtml(bodyHtml: string): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+
+  for (const match of bodyHtml.matchAll(NOTE_ID_HTML_RE)) {
+    const id = match[1];
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+
+  return ids;
+}
+
+function mapDomCards(cards: CreatorNoteDomCard[]): CreatorNoteRow[] {
+  return cards.map((card) => ({
+    id: card.id,
+    title: card.title,
+    date: card.date,
+    views: card.metrics[0] ?? 0,
+    likes: card.metrics[2] ?? 0,
+    collects: card.metrics[3] ?? 0,
+    comments: card.metrics[1] ?? 0,
+    url: buildNoteDetailUrl(card.id),
+  }));
+}
+
+function mapAnalyzeItems(items: NonNullable<CreatorAnalyzeApiResponse['data']>['note_infos']): CreatorNoteRow[] {
+  return (items ?? []).map((item) => ({
+    id: item.id ?? '',
+    title: item.title ?? '',
+    date: formatPostTime(item.post_time),
+    views: item.read_count ?? 0,
+    likes: item.like_count ?? 0,
+    collects: item.fav_count ?? 0,
+    comments: item.comment_count ?? 0,
+    url: buildNoteDetailUrl(item.id),
+  }));
+}
+
+async function fetchCreatorNotesByApi(page: IPage, limit: number): Promise<CreatorNoteRow[]> {
+  const pageSize = Math.min(Math.max(limit, 10), 20);
+  const maxPages = Math.max(1, Math.ceil(limit / pageSize));
+  const notes: CreatorNoteRow[] = [];
+
+  await page.goto(`https://creator.xiaohongshu.com/statistics/data-analysis?type=0&page_size=${pageSize}&page_num=1`);
+
+  for (let pageNum = 1; pageNum <= maxPages && notes.length < limit; pageNum++) {
+    const apiPath = `${NOTE_ANALYZE_API_PATH}?type=0&page_size=${pageSize}&page_num=${pageNum}`;
+    const fetched = await page.evaluate(`
+      async () => {
+        try {
+          const resp = await fetch(${JSON.stringify(apiPath)}, { credentials: 'include' });
+          if (!resp.ok) return { error: 'HTTP ' + resp.status };
+          return await resp.json();
+        } catch (e) {
+          return { error: e?.message ?? String(e) };
+        }
+      }
+    `) as CreatorAnalyzeApiResponse | undefined;
+
+    let items = fetched?.data?.note_infos ?? [];
+
+    if (!items.length) {
+      await page.installInterceptor(NOTE_ANALYZE_API_PATH);
+      await page.evaluate(`
+        async () => {
+          try {
+            await fetch(${JSON.stringify(apiPath)}, { credentials: 'include' });
+          } catch {}
+          return true;
+        }
+      `);
+      await page.wait(1);
+      const intercepted = await page.getInterceptedRequests();
+      const data = intercepted.find((entry: CreatorAnalyzeApiResponse) => Array.isArray(entry?.data?.note_infos)) as CreatorAnalyzeApiResponse | undefined;
+      items = data?.data?.note_infos ?? [];
+    }
+
+    if (!items.length) break;
+
+    notes.push(...mapAnalyzeItems(items));
+    if (items.length < pageSize) break;
+  }
+
+  return notes.slice(0, limit);
+}
+
+export async function fetchCreatorNotes(page: IPage, limit: number): Promise<CreatorNoteRow[]> {
+  let notes = await fetchCreatorNotesByApi(page, limit);
+
+  if (notes.length === 0) {
+    await page.goto('https://creator.xiaohongshu.com/new/note-manager');
+
+    const maxPageDowns = Math.max(0, Math.ceil(limit / 10) + 1);
+    for (let i = 0; i <= maxPageDowns; i++) {
+      const domCards = await page.evaluate(`() => {
+        const noteIdRe = /"noteId":"([0-9a-f]{24})"/;
+        return Array.from(document.querySelectorAll('div.note[data-impression], div.note')).map((card) => {
+          const impression = card.getAttribute('data-impression') || '';
+          const id = impression.match(noteIdRe)?.[1] || '';
+          const title = (card.querySelector('.title, .raw')?.innerText || '').trim();
+          const dateText = (card.querySelector('.time_status, .time')?.innerText || '').trim();
+          const date = dateText.replace(/^发布于\\s*/, '');
+          const metrics = Array.from(card.querySelectorAll('.icon_list .icon'))
+            .map((el) => parseInt((el.innerText || '').trim(), 10))
+            .filter((value) => Number.isFinite(value));
+          return { id, title, date, metrics };
+        });
+      }`) as CreatorNoteDomCard[] | undefined;
+      const parsedDomNotes = mapDomCards(Array.isArray(domCards) ? domCards : []).filter((note) => note.title && note.date);
+      if (parsedDomNotes.length > 0) {
+        notes = parsedDomNotes;
+      }
+
+      if (notes.length >= limit || (notes.length > 0 && i === 0)) break;
+
+      const body = await page.evaluate('() => ({ text: document.body.innerText, html: document.body.innerHTML })') as {
+        text?: string;
+        html?: string;
+      };
+      const bodyText = typeof body?.text === 'string' ? body.text : '';
+      const bodyHtml = typeof body?.html === 'string' ? body.html : '';
+      const parsedNotes = parseCreatorNotesText(bodyText);
+      const noteIds = parseCreatorNoteIdsFromHtml(bodyHtml);
+      notes = parsedNotes.map((note, index) => {
+        const id = noteIds[index] ?? '';
+        return {
+          ...note,
+          id,
+          url: buildNoteDetailUrl(id),
+        };
+      });
+      if (notes.length >= limit || i === maxPageDowns) break;
+
+      await page.pressKey('PageDown');
+      await page.wait(1);
+    }
+  }
+
+  return notes.slice(0, limit);
+}
 
 cli({
   site: 'xiaohongshu',
@@ -24,76 +272,7 @@ cli({
   columns: ['rank', 'id', 'title', 'date', 'views', 'likes', 'collects', 'comments', 'url'],
   func: async (page, kwargs) => {
     const limit = kwargs.limit || 20;
-
-    // Navigate to note manager
-    await page.goto('https://creator.xiaohongshu.com/new/note-manager');
-    await page.wait(4);
-
-    // Scroll to load more notes if needed
-    await page.autoScroll({ times: Math.ceil(limit / 10), delayMs: 1500 });
-
-    // Extract note data from rendered DOM
-    const notes = await page.evaluate(`
-      (() => {
-        const results = [];
-        // Note cards in the manager page contain title, date, and metric numbers
-        // Each note card has a consistent structure with the title, date line,
-        // and a row of 4 numbers (views, likes, collects, comments)
-        const cards = document.querySelectorAll('[class*="note-item"], [class*="noteItem"], [class*="card"]');
-
-        if (cards.length === 0) {
-          // Fallback: parse from any container with note-like content
-          const allText = document.body.innerText;
-          const notePattern = /(.+?)\\s+发布于\\s+(\\d{4}年\\d{2}月\\d{2}日\\s+\\d{2}:\\d{2})\\s*(\\d+)\\s*(\\d+)\\s*(\\d+)\\s*(\\d+)/g;
-          let match;
-          while ((match = notePattern.exec(allText)) !== null) {
-            results.push({
-              title: match[1].trim(),
-              date: match[2],
-              views: parseInt(match[3]) || 0,
-              likes: parseInt(match[4]) || 0,
-              collects: parseInt(match[5]) || 0,
-              comments: parseInt(match[6]) || 0,
-            });
-          }
-          return results;
-        }
-
-        cards.forEach(card => {
-          const text = card.innerText || '';
-          const linkEl = card.querySelector('a[href*="/publish/"], a[href*="/note/"], a[href*="/explore/"]');
-          const href = linkEl?.getAttribute('href') || '';
-          const idMatch = href.match(/\/(?:publish|explore|note)\/([a-zA-Z0-9]+)/);
-          // Try to extract structured data
-          const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);
-          if (lines.length < 2) return;
-
-          const title = lines[0];
-          const dateLine = lines.find(l => l.includes('发布于'));
-          const dateMatch = dateLine?.match(/发布于\\s+(\\d{4}年\\d{2}月\\d{2}日\\s+\\d{2}:\\d{2})/);
-
-          // Remove the publish timestamp before collecting note metrics.
-          // Otherwise year/month/day/hour digits are picked up as views/likes/etc.
-          const metricText = dateLine ? text.replace(dateLine, ' ') : text;
-          const nums = metricText.match(/(?:^|\\s)(\\d+)(?:\\s|$)/g)?.map(n => parseInt(n.trim())) || [];
-
-          if (title && !title.includes('全部笔记')) {
-            results.push({
-              id: idMatch ? idMatch[1] : '',
-              title: title.replace(/\\s+/g, ' ').substring(0, 80),
-              date: dateMatch ? dateMatch[1] : '',
-              views: nums[0] || 0,
-              likes: nums[1] || 0,
-              collects: nums[2] || 0,
-              comments: nums[3] || 0,
-              url: href ? new URL(href, window.location.origin).toString() : '',
-            });
-          }
-        });
-
-        return results;
-      })()
-    `);
+    const notes = await fetchCreatorNotes(page, limit);
 
     if (!Array.isArray(notes) || notes.length === 0) {
       throw new Error('No notes found. Are you logged into creator.xiaohongshu.com?');
@@ -101,7 +280,7 @@ cli({
 
     return notes
       .slice(0, limit)
-      .map((n: any, i: number) => ({
+      .map((n: CreatorNoteRow, i: number) => ({
         rank: i + 1,
         id: n.id,
         title: n.title,

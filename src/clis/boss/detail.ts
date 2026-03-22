@@ -1,11 +1,8 @@
 /**
  * BOSS直聘 job detail — fetch full job posting details via browser cookie API.
- *
- * Uses securityId from search results to call the detail API.
- * Returns: job description, skills, welfare, boss info, company info, address.
  */
 import { cli, Strategy } from '../../registry.js';
-import type { IPage } from '../../types.js';
+import { requirePage, navigateTo, bossFetch, verbose } from './common.js';
 
 cli({
   site: 'boss',
@@ -13,10 +10,10 @@ cli({
   description: 'BOSS直聘查看职位详情',
   domain: 'www.zhipin.com',
   strategy: Strategy.COOKIE,
-
+  navigateBefore: false,
   browser: true,
   args: [
-    { name: 'security_id', required: true, help: 'Security ID from search results (securityId field)' },
+    { name: 'security-id', required: true, help: 'Security ID from search results (securityId field)' },
   ],
   columns: [
     'name', 'salary', 'experience', 'degree', 'city', 'district',
@@ -25,60 +22,17 @@ cli({
     'company', 'industry', 'scale', 'stage',
     'address', 'url',
   ],
-  func: async (page: IPage | null, kwargs) => {
-    if (!page) throw new Error('Browser page required');
+  func: async (page, kwargs) => {
+    requirePage(page);
 
-    const securityId = kwargs.security_id;
+    const securityId = kwargs['security-id'];
+    verbose('Fetching job detail...');
 
     // Navigate to zhipin.com first to establish cookie context (referrer + cookies)
-    await page.goto('https://www.zhipin.com/web/geek/job');
-    await page.wait({ time: 1 });
+    await navigateTo(page, 'https://www.zhipin.com/web/geek/job');
 
     const targetUrl = `https://www.zhipin.com/wapi/zpgeek/job/detail.json?securityId=${encodeURIComponent(securityId)}`;
-
-    if (process.env.OPENCLI_VERBOSE || process.env.DEBUG?.includes('opencli')) {
-      console.error(`[opencli:boss] Fetching job detail...`);
-    }
-
-    const evaluateScript = `
-      async () => {
-        return new Promise((resolve, reject) => {
-          const xhr = new window.XMLHttpRequest();
-          xhr.open('GET', ${JSON.stringify(targetUrl)}, true);
-          xhr.withCredentials = true;
-          xhr.timeout = 15000;
-          xhr.setRequestHeader('Accept', 'application/json, text/plain, */*');
-          xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              try {
-                resolve(JSON.parse(xhr.responseText));
-              } catch (e) {
-                reject(new Error('Failed to parse JSON. Raw (200 chars): ' + xhr.responseText.substring(0, 200)));
-              }
-            } else {
-              reject(new Error('XHR HTTP Status: ' + xhr.status));
-            }
-          };
-          xhr.onerror = () => reject(new Error('XHR Network Error'));
-          xhr.ontimeout = () => reject(new Error('XHR Timeout'));
-          xhr.send();
-        });
-      }
-    `;
-
-    let data: any;
-    try {
-      data = await page.evaluate(evaluateScript);
-    } catch (e: any) {
-      throw new Error('API evaluate failed: ' + e.message);
-    }
-
-    if (data.code !== 0) {
-      if (data.code === 37) {
-        throw new Error('Cookie 已过期！请在当前 Chrome 浏览器中重新登录 BOSS 直聘。');
-      }
-      throw new Error(`BOSS API error: ${data.message || 'Unknown'} (code=${data.code})`);
-    }
+    const data = await bossFetch(page, targetUrl);
 
     const zpData = data.zpData || {};
     const jobInfo = zpData.jobInfo || {};

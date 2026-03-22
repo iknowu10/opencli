@@ -2,7 +2,7 @@
  * Xiaohongshu download — download images and videos from a note.
  *
  * Usage:
- *   opencli xiaohongshu download --note-id abc123 --output ./xhs
+ *   opencli xiaohongshu download --note_id abc123 --output ./xhs
  */
 
 import * as fs from 'node:fs';
@@ -11,7 +11,7 @@ import { cli, Strategy } from '../../registry.js';
 import {
   httpDownload,
   sanitizeFilename,
-  detectContentType,
+  formatCookieHeader,
 } from '../../download/index.js';
 import { DownloadProgressTracker, formatBytes } from '../../download/progress.js';
 
@@ -22,17 +22,16 @@ cli({
   domain: 'www.xiaohongshu.com',
   strategy: Strategy.COOKIE,
   args: [
-    { name: 'note_id', required: true, help: 'Note ID (from URL)' },
+    { name: 'note-id', required: true, help: 'Note ID (from URL)' },
     { name: 'output', default: './xiaohongshu-downloads', help: 'Output directory' },
   ],
   columns: ['index', 'type', 'status', 'size'],
   func: async (page, kwargs) => {
-    const noteId = kwargs.note_id;
+    const noteId = kwargs['note-id'];
     const output = kwargs.output;
 
     // Navigate to note page
     await page.goto(`https://www.xiaohongshu.com/explore/${noteId}`);
-    await page.wait(3);
 
     // Extract note info and media URLs
     const data = await page.evaluate(`
@@ -114,7 +113,7 @@ cli({
     }
 
     // Extract cookies for authenticated downloads
-    const cookies = await page.evaluate(`(() => document.cookie)()`);
+    const cookies = formatCookieHeader(await page.getCookies({ domain: 'xiaohongshu.com' }));
 
     // Create output directory
     const outputDir = path.join(output, noteId);
@@ -134,7 +133,7 @@ cli({
 
       try {
         const result = await httpDownload(media.url, destPath, {
-          cookies: typeof cookies === 'string' ? cookies : '',
+          cookies,
           timeout: 60000,
           onProgress: (received, total) => {
             if (progressBar) progressBar.update(received, total);

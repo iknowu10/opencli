@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { PlaywrightMCP, __test__ } from './browser/index.js';
+import { BrowserBridge, __test__ } from './browser/index.js';
+import * as daemonClient from './browser/daemon-client.js';
 
 describe('browser helpers', () => {
   it('extracts tab entries from string snapshots', () => {
@@ -43,11 +44,57 @@ describe('browser helpers', () => {
   it('times out slow promises', async () => {
     await expect(__test__.withTimeoutMs(new Promise(() => {}), 10, 'timeout')).rejects.toThrow('timeout');
   });
+
+  it('prefers the real Electron app target over DevTools and blank pages', () => {
+    const target = __test__.selectCDPTarget([
+      {
+        type: 'page',
+        title: 'DevTools - localhost:9224',
+        url: 'devtools://devtools/bundled/inspector.html',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9224/devtools',
+      },
+      {
+        type: 'page',
+        title: '',
+        url: 'about:blank',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9224/blank',
+      },
+      {
+        type: 'app',
+        title: 'Antigravity',
+        url: 'http://localhost:3000/',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9224/app',
+      },
+    ]);
+
+    expect(target?.webSocketDebuggerUrl).toBe('ws://127.0.0.1:9224/app');
+  });
+
+  it('honors OPENCLI_CDP_TARGET when multiple inspectable targets exist', () => {
+    vi.stubEnv('OPENCLI_CDP_TARGET', 'codex');
+
+    const target = __test__.selectCDPTarget([
+      {
+        type: 'app',
+        title: 'Cursor',
+        url: 'http://localhost:3000/cursor',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9226/cursor',
+      },
+      {
+        type: 'app',
+        title: 'OpenAI Codex',
+        url: 'http://localhost:3000/codex',
+        webSocketDebuggerUrl: 'ws://127.0.0.1:9226/codex',
+      },
+    ]);
+
+    expect(target?.webSocketDebuggerUrl).toBe('ws://127.0.0.1:9226/codex');
+  });
 });
 
-describe('PlaywrightMCP state', () => {
+describe('BrowserBridge state', () => {
   it('transitions to closed after close()', async () => {
-    const mcp = new PlaywrightMCP();
+    const mcp = new BrowserBridge();
 
     expect(mcp.state).toBe('idle');
 
@@ -57,23 +104,32 @@ describe('PlaywrightMCP state', () => {
   });
 
   it('rejects connect() after the session has been closed', async () => {
-    const mcp = new PlaywrightMCP();
+    const mcp = new BrowserBridge();
     await mcp.close();
 
     await expect(mcp.connect()).rejects.toThrow('Session is closed');
   });
 
   it('rejects connect() while already connecting', async () => {
-    const mcp = new PlaywrightMCP();
+    const mcp = new BrowserBridge();
     (mcp as any)._state = 'connecting';
 
     await expect(mcp.connect()).rejects.toThrow('Already connecting');
   });
 
   it('rejects connect() while closing', async () => {
-    const mcp = new PlaywrightMCP();
+    const mcp = new BrowserBridge();
     (mcp as any)._state = 'closing';
 
     await expect(mcp.connect()).rejects.toThrow('Session is closing');
+  });
+
+  it('fails fast when daemon is running but extension is disconnected', async () => {
+    vi.spyOn(daemonClient, 'isExtensionConnected').mockResolvedValue(false);
+    vi.spyOn(daemonClient, 'isDaemonRunning').mockResolvedValue(true);
+
+    const mcp = new BrowserBridge();
+
+    await expect(mcp.connect()).rejects.toThrow('Browser Extension is not connected');
   });
 });

@@ -11,10 +11,12 @@ function createMockPage(overrides: Partial<IPage> = {}): IPage {
   return {
     goto: vi.fn(),
     evaluate: vi.fn().mockResolvedValue(null),
+    getCookies: vi.fn().mockResolvedValue([]),
     snapshot: vi.fn().mockResolvedValue(''),
     click: vi.fn(),
     typeText: vi.fn(),
     pressKey: vi.fn(),
+    getFormState: vi.fn().mockResolvedValue({}),
     wait: vi.fn(),
     tabs: vi.fn().mockResolvedValue([]),
     closeTab: vi.fn(),
@@ -23,6 +25,7 @@ function createMockPage(overrides: Partial<IPage> = {}): IPage {
     networkRequests: vi.fn().mockResolvedValue([]),
     consoleMessages: vi.fn().mockResolvedValue(''),
     scroll: vi.fn(),
+    scrollTo: vi.fn(),
     autoScroll: vi.fn(),
     installInterceptor: vi.fn(),
     getInterceptedRequests: vi.fn().mockResolvedValue([]),
@@ -75,6 +78,32 @@ describe('executePipeline', () => {
     expect(result).toEqual([
       { name: 'Hello', score: 10 },
       { name: 'World', score: 20 },
+    ]);
+  });
+
+  it('runs inline select inside map step', async () => {
+    const page = createMockPage({
+      evaluate: vi.fn().mockResolvedValue({
+        posts: [
+          { title: 'First', rank: 1 },
+          { title: 'Second', rank: 2 },
+        ],
+      }),
+    });
+    const result = await executePipeline(page, [
+      { evaluate: 'test' },
+      {
+        map: {
+          select: 'posts',
+          title: '${{ item.title }}',
+          rank: '${{ item.rank }}',
+        },
+      },
+    ]);
+
+    expect(result).toEqual([
+      { title: 'First', rank: 1 },
+      { title: 'Second', rank: 2 },
     ]);
   });
 

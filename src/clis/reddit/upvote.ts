@@ -8,7 +8,7 @@ cli({
   strategy: Strategy.COOKIE,
   browser: true,
   args: [
-    { name: 'post_id', type: 'string', required: true, help: 'Post ID (e.g. 1abc123) or fullname (t3_xxx)' },
+    { name: 'post-id', type: 'string', required: true, positional: true, help: 'Post ID (e.g. 1abc123) or fullname (t3_xxx)' },
     { name: 'direction', type: 'string', default: 'up', help: 'Vote direction: up, down, none' },
   ],
   columns: ['status', 'message'],
@@ -16,11 +16,10 @@ cli({
     if (!page) throw new Error('Requires browser');
 
     await page.goto('https://www.reddit.com');
-    await page.wait(3);
 
     const result = await page.evaluate(`(async () => {
       try {
-        let postId = ${JSON.stringify(kwargs.post_id)};
+        let postId = ${JSON.stringify(kwargs['post-id'])};
         // Extract ID from URL if needed
         const urlMatch = postId.match(/comments\\/([a-z0-9]+)/);
         if (urlMatch) postId = urlMatch[1];

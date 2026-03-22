@@ -1,7 +1,7 @@
 # OpenCLI
 
-> **Make any website or Electron App your CLI.**  
-> Zero risk · Reuse Chrome login · AI-powered discovery · Browser + Desktop automation
+> **Make any website, Electron App, or Local Tool your CLI.**  
+> Zero risk · Reuse Chrome login · AI-powered discovery · Universal CLI Hub
 
 [中文文档](./README.zh-CN.md)
 
@@ -9,9 +9,11 @@
 [![Node.js Version](https://img.shields.io/node/v/@jackwener/opencli?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/npm/l/@jackwener/opencli?style=flat-square)](./LICENSE)
 
-A CLI tool that turns **any website** or **Electron app** into a command-line interface — Bilibili, Zhihu, 小红书, Twitter/X, Reddit, YouTube, Antigravity, and [many more](#built-in-commands) — powered by browser session reuse and AI-native discovery.
+A CLI tool that turns **any website**, **Electron app**, or **local CLI tool** into a command-line interface — Bilibili, Zhihu, 小红书, Twitter/X, Reddit, YouTube, Antigravity, `gh`, `docker`, and [many more](#built-in-commands) — powered by browser session reuse and AI-native discovery.
 
-🔥 **CLI All Electron Apps! The Most Powerful Update Has Arrived!** 🔥
+**Built for AI Agents**: Simply configure an instruction in your global `AGENT.md` or `.cursorrules` guiding the AI to execute `opencli list` via Bash to discover available tools. Register your favorite local CLIs (`opencli register mycli`), and the AI will automatically learn how to invoke all your tools perfectly!
+
+**CLI All Electron Apps! The Most Powerful Update Has Arrived!**
 Turn ANY Electron application into a CLI tool! Recombine, script, and extend applications like Antigravity Ultra seamlessly. Now AI can control itself natively. Unlimited possibilities await!
 
 ---
@@ -22,6 +24,8 @@ Turn ANY Electron application into a CLI tool! Recombine, script, and extend app
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
 - [Built-in Commands](#built-in-commands)
+  - [Desktop App Adapters](#desktop-app-adapters)
+- [External CLI Hub](#external-cli-hub)
 - [Download Support](#download-support)
 - [Output Formats](#output-formats)
 - [For AI Agents (Developer Guide)](#for-ai-agents-developer-guide)
@@ -38,7 +42,8 @@ Turn ANY Electron application into a CLI tool! Recombine, script, and extend app
 - **CLI All Electron** — CLI-ify apps like Antigravity Ultra! Now AI can control itself natively using cc/openclaw!
 - **Account-safe** — Reuses Chrome's logged-in state; your credentials never leave the browser.
 - **AI Agent ready** — `explore` discovers APIs, `synthesize` generates adapters, `cascade` finds auth strategies.
-- **Self-healing setup** — `opencli setup` auto-discovers tokens; `opencli doctor` diagnoses config across 10+ tools; `--fix` repairs them all.
+- **External CLI Hub** — Discover, auto-install, and passthrough commands to any external CLI (gh, obsidian, docker, kubectl, etc). Zero setup.
+- **Self-healing setup** — `opencli setup` verifies Browser Bridge connectivity; `opencli doctor` diagnoses daemon, extension, and live browser connectivity.
 - **Dynamic Loader** — Simply drop `.ts` or `.yaml` adapters into the `clis/` folder for auto-registration.
 - **Dual-Engine Architecture** — Supports both YAML declarative data pipelines and robust browser runtime TypeScript injections.
 
@@ -53,10 +58,18 @@ OpenCLI connects to your browser through a lightweight **Browser Bridge** Chrome
 
 ### Browser Bridge Extension Setup
 
-1. Install the **opencli Browser Bridge** extension in Chrome:
-   - Open `chrome://extensions`, enable **Developer mode** (top-right toggle)
-   - Click **Load unpacked**, select the `extension/` folder from this repo
-2. That's it! The daemon auto-starts when you run any browser command. No tokens, no manual configuration.
+You can install the extension via either method:
+
+**Method 1: Download Pre-built Release (Recommended)**
+1. Go to the GitHub [Releases page](https://github.com/jackwener/opencli/releases) and download the latest `opencli-extension.zip` or `opencli-extension.crx`.
+2. Open `chrome://extensions` and enable **Developer mode** (top-right toggle).
+3. Drag and drop the `.crx` file or the unzipped folder into the extensions page.
+
+**Method 2: Load Unpacked Source (For Developers)**
+1. Open `chrome://extensions` and enable **Developer mode**.
+2. Click **Load unpacked** and select the `extension/` directory from this repository.
+
+That's it! The daemon auto-starts when you run any browser command. No tokens, no manual configuration.
 
 > **Tip**: Use `opencli doctor` for ongoing diagnosis:
 > ```bash
@@ -106,34 +119,85 @@ Run `opencli list` for the live registry.
 
 | Site | Commands | Mode |
 |------|----------|------|
-| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` | 🔐 Browser |
-| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 🔐 Browser |
-| **cursor** | `status` `send` `read` `new` `dump` `composer` `model` `extract-code` `ask` `screenshot` `history` `export` | 🖥️ Desktop |
-| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` `download` | 🔐 Browser |
-| **codex** | `status` `send` `read` `new` `extract-diff` `model` `ask` `screenshot` `history` `export` | 🖥️ Desktop |
-| **chatwise** | `status` `new` `send` `read` `ask` `model` `history` `export` `screenshot` | 🖥️ Desktop |
-| **notion** | `status` `search` `read` `new` `write` `sidebar` `favorites` `export` | 🖥️ Desktop |
-| **discord-app** | `status` `send` `read` `channels` `servers` `search` `members` | 🖥️ Desktop |
-| **v2ex** | `hot` `latest` `topic` `daily` `me` `notifications` | 🌐 / 🔐 |
-| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` | 🔐 Browser |
-| **antigravity** | `status` `send` `read` `new` `evaluate` | 🖥️ Desktop |
-| **chatgpt** | `status` `new` `send` `read` `ask` | 🖥️ Desktop |
-| **xiaohongshu** | `search` `notifications` `feed` `me` `user` `download` | 🔐 Browser |
-| **apple-podcasts** | `search` `episodes` `top` | 🌐 Public |
-| **xiaoyuzhou** | `podcast` `podcast-episodes` `episode` | 🌐 Public |
-| **zhihu** | `hot` `search` `question` `download` | 🔐 Browser |
-| **youtube** | `search` `video` `transcript` | 🔐 Browser |
-| **boss** | `search` `detail` | 🔐 Browser |
-| **coupang** | `search` `add-to-cart` | 🔐 Browser |
-| **bbc** | `news` | 🌐 Public |
-| **ctrip** | `search` | 🔐 Browser |
-| **github** | `search` | 🌐 Public |
-| **hackernews** | `top` | 🌐 Public |
-| **linkedin** | `search` | 🔐 Browser |
-| **reuters** | `search` | 🔐 Browser |
-| **smzdm** | `search` | 🔐 Browser |
-| **weibo** | `hot` | 🔐 Browser |
-| **yahoo-finance** | `quote` | 🔐 Browser |
+| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` | Browser |
+| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | Browser |
+| **cursor** | `status` `send` `read` `new` `dump` `composer` `model` `extract-code` `ask` `screenshot` `history` `export` | Desktop |
+| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` `download` | Browser |
+| **codex** | `status` `send` `read` `new` `dump` `extract-diff` `model` `ask` `screenshot` `history` `export` | Desktop |
+| **chatwise** | `status` `new` `send` `read` `ask` `model` `history` `export` `screenshot` | Desktop |
+| **notion** | `status` `search` `read` `new` `write` `sidebar` `favorites` `export` | Desktop |
+| **discord-app** | `status` `send` `read` `channels` `servers` `search` `members` | Desktop |
+| **v2ex** | `hot` `latest` `topic` `daily` `me` `notifications` | Public / Browser |
+| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` | Browser |
+| **antigravity** | `status` `send` `read` `new` `dump` `extract-code` `model` `watch` `serve` | Desktop |
+| **chatgpt** | `status` `new` `send` `read` `ask` | Desktop |
+| **xiaohongshu** | `search` `notifications` `feed` `user` `download` `creator-notes` `creator-note-detail` `creator-notes-summary` `creator-profile` `creator-stats` | Browser |
+| **apple-podcasts** | `search` `episodes` `top` | Public |
+| **xiaoyuzhou** | `podcast` `podcast-episodes` `episode` | Public |
+| **zhihu** | `hot` `search` `question` `download` | Browser |
+| **youtube** | `search` `video` `transcript` | Browser |
+| **boss** | `search` `detail` `recommend` `joblist` `greet` `batchgreet` `send` `chatlist` `chatmsg` `invite` `mark` `exchange` `resume` `stats` | Browser |
+| **coupang** | `search` `add-to-cart` | Browser |
+| **bbc** | `news` | Public |
+| **bloomberg** | `main` `markets` `economics` `industries` `tech` `politics` `businessweek` `opinions` `feeds` `news` | Public / Browser |
+| **ctrip** | `search` | Browser |
+| **arxiv** | `search` `paper` | Public |
+| **wikipedia** | `search` `summary` | Public |
+| **hackernews** | `top` | Public |
+| **linkedin** | `search` | Browser |
+| **reuters** | `search` | Browser |
+| **smzdm** | `search` | Browser |
+| **weibo** | `hot` | Browser |
+| **yahoo-finance** | `quote` | Browser |
+| **sinafinance** | `news` | 🌐 Public |
+| **barchart** | `quote` `options` `greeks` `flow` | Browser |
+| **chaoxing** | `assignments` `exams` | Browser |
+| **grok** | `ask` | Desktop |
+| **hf** | `top` | Public |
+| **jike** | `feed` `search` `create` `like` `comment` `repost` `notifications` `post` `topic` `user` | Browser |
+| **jimeng** | `generate` `history` | Browser |
+| **linux-do** | `hot` `latest` `search` `categories` `category` `topic` | Public |
+| **stackoverflow** | `hot` `search` `bounties` `unanswered` | Public |
+| **steam** | `top-sellers` | Public |
+| **weread** | `shelf` `search` `book` `highlights` `notes` `notebooks` `ranking` | Browser |
+
+> **Bloomberg note**: The RSS-backed Bloomberg listing commands (`main`, section feeds, `feeds`) work without a browser. `bloomberg news` is for standard Bloomberg story/article pages that your current Chrome session can already access. Audio and some other non-standard pages may fail, and OpenCLI does not bypass Bloomberg paywall or entitlement checks.
+
+### External CLI Hub
+
+OpenCLI acts as a universal hub for your existing command-line tools. It provides unified discovery, automatic installation, and pure passthrough execution.
+
+| External CLI | Description | Commands Example |
+|--------------|-------------|------------------|
+| **gh** | GitHub CLI | `opencli gh pr list --limit 5` |
+| **obsidian** | Obsidian vault management | `opencli obsidian search query="AI"` |
+| **docker** | Docker command-line interface | `opencli docker ps` |
+| **kubectl** | Kubernetes command-line tool | `opencli kubectl get pods` |
+| **readwise** | Readwise & Reader CLI | `opencli readwise login` |
+
+**Zero Configuration**: OpenCLI purely passes your inputs to the underlying binary via standard I/O streams. The external CLI works exactly as it naturally would, maintaining its standard output formats.
+
+**Auto-Installation**: If you run `opencli gh ...` and `gh` is not installed on your system, OpenCLI will automatically try to install it using your system's package manager (e.g., `brew install gh`) before seamlessly re-running the command.
+
+**Register Your Own**:
+Add any local CLI to your OpenCLI registry so AI agents can automatically discover it via the `opencli list` command.
+```bash
+opencli register mycli
+```
+
+### Desktop App Adapters
+
+Each desktop adapter has its own detailed documentation with commands reference, setup guide, and examples:
+
+| App | Description | Doc |
+|-----|-------------|-----|
+| **Cursor** | Control Cursor IDE — Composer, chat, code extraction | [Doc](./docs/adapters/desktop/cursor.md) |
+| **Codex** | Drive OpenAI Codex CLI agent headlessly | [Doc](./docs/adapters/desktop/codex.md) |
+| **Antigravity** | Control Antigravity Ultra from terminal | [Doc](./docs/adapters/desktop/antigravity.md) |
+| **ChatGPT** | Automate ChatGPT macOS desktop app | [Doc](./docs/adapters/desktop/chatgpt.md) |
+| **ChatWise** | Multi-LLM client (GPT-4, Claude, Gemini) | [Doc](./docs/adapters/desktop/chatwise.md) |
+| **Notion** | Search, read, write Notion pages | [Doc](./docs/adapters/desktop/notion.md) |
+| **Discord** | Discord Desktop — messages, channels, servers | [Doc](./docs/adapters/desktop/discord.md) |
 
 ## Download Support
 
@@ -170,16 +234,16 @@ opencli bilibili download --bvid BV1xxx --output ./bilibili
 opencli bilibili download --bvid BV1xxx --quality 1080p  # Specify quality
 
 # Download Twitter media from user
-opencli twitter download --username elonmusk --limit 20 --output ./twitter
+opencli twitter download elonmusk --limit 20 --output ./twitter
 
 # Download single tweet media
 opencli twitter download --tweet-url "https://x.com/user/status/123" --output ./twitter
 
 # Export Zhihu article to Markdown
-opencli zhihu download --url "https://zhuanlan.zhihu.com/p/xxx" --output ./zhihu
+opencli zhihu download "https://zhuanlan.zhihu.com/p/xxx" --output ./zhihu
 
 # Export with local images
-opencli zhihu download --url "https://zhuanlan.zhihu.com/p/xxx" --download-images
+opencli zhihu download "https://zhuanlan.zhihu.com/p/xxx" --download-images
 ```
 
 ### Pipeline Step (for YAML adapters)

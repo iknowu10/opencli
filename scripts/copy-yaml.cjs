@@ -19,3 +19,10 @@ function walk(src, dst) {
 }
 
 walk('src/clis', 'dist/clis');
+
+// Copy external CLI registry to dist/
+const extSrc = 'src/external-clis.yaml';
+if (existsSync(extSrc)) {
+  mkdirSync('dist', { recursive: true });
+  copyFileSync(extSrc, 'dist/external-clis.yaml');
+}

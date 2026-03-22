@@ -1,5 +1,5 @@
 import { cli, Strategy } from '../../registry.js';
-import { mergeSearchItems, normalizeSearchItem, sanitizeSearchItems } from '../../coupang.js';
+import { mergeSearchItems, normalizeSearchItem, sanitizeSearchItems } from './utils.js';
 
 function escapeJsString(value: string): string {
   return JSON.stringify(value);
@@ -409,7 +409,7 @@ cli({
   strategy: Strategy.COOKIE,
   browser: true,
   args: [
-    { name: 'query', required: true, help: 'Search keyword' },
+    { name: 'query', required: true, positional: true, help: 'Search keyword' },
     { name: 'page', type: 'int', default: 1, help: 'Search result page number' },
     { name: 'limit', type: 'int', default: 20, help: 'Max results (max 50)' },
     { name: 'filter', required: false, help: 'Optional search filter (currently supports: rocket)' },
@@ -425,7 +425,6 @@ cli({
     const initialPage = filter ? 1 : pageNumber;
     const url = `https://www.coupang.com/np/search?q=${encodeURIComponent(query)}&channel=user&page=${initialPage}`;
     await page.goto(url);
-    await page.wait(3);
     if (filter) {
       const filterResult = await page.evaluate(buildApplyFilterEvaluate(filter));
       if (!filterResult?.ok) {
@@ -437,7 +436,6 @@ cli({
         const filteredUrl = new URL(locationInfo?.href || url);
         filteredUrl.searchParams.set('page', String(pageNumber));
         await page.goto(filteredUrl.toString());
-        await page.wait(3);
       }
     }
     await page.autoScroll({ times: filter ? 3 : 2, delayMs: 1500 });

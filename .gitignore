@@ -5,3 +5,17 @@ dist/
 .opencli/
 .mcp.json
 *.log
+.DS_Store
+
+# VitePress
+docs/.vitepress/dist
+docs/.vitepress/cache
+
+# Extensions & Secrets
+*.pem
+*.crx
+*.zip
+.envrc
+.windsurf
+.claude
+.cortex

@@ -2,7 +2,7 @@
  * Download utilities: HTTP downloads, yt-dlp wrapper, format conversion.
  */
 
-import { spawn, execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as https from 'node:https';
@@ -10,6 +10,7 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import { URL } from 'node:url';
 import type { ProgressBar } from './progress.js';
+import { isBinaryInstalled } from '../external.js';
 
 export interface DownloadOptions {
   cookies?: string;
@@ -26,68 +27,53 @@ export interface YtdlpOptions {
   onProgress?: (percent: number) => void;
 }
 
-/**
- * Check if yt-dlp is available in PATH.
- */
-export function checkYtdlp(): boolean {
-  try {
-    execSync('yt-dlp --version', { encoding: 'utf-8', stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
+export interface BrowserCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  expirationDate?: number;
 }
 
-/**
- * Check if ffmpeg is available in PATH.
- */
-export function checkFfmpeg(): boolean {
-  try {
-    execSync('ffmpeg -version', { encoding: 'utf-8', stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
+/** Check if yt-dlp is available in PATH. */
+export function checkYtdlp(): boolean {
+  return isBinaryInstalled('yt-dlp');
 }
+
+/** Check if ffmpeg is available in PATH. */
+export function checkFfmpeg(): boolean {
+  return isBinaryInstalled('ffmpeg');
+}
+
+/** Domains that host video content and can be downloaded via yt-dlp. */
+const VIDEO_PLATFORM_DOMAINS = [
+  'youtube.com', 'youtu.be', 'bilibili.com', 'twitter.com',
+  'x.com', 'tiktok.com', 'vimeo.com', 'twitch.tv',
+];
+
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico', '.bmp', '.avif']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv', '.m3u8', '.ts']);
+const DOC_EXTENSIONS = new Set(['.html', '.htm', '.json', '.xml', '.txt', '.md', '.markdown']);
 
 /**
  * Detect content type from URL and optional headers.
  */
 export function detectContentType(url: string, contentType?: string): 'image' | 'video' | 'document' | 'binary' {
-  // Check content-type header first
   if (contentType) {
     if (contentType.startsWith('image/')) return 'image';
     if (contentType.startsWith('video/')) return 'video';
     if (contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml')) return 'document';
   }
 
-  // Detect from URL
   const urlLower = url.toLowerCase();
   const ext = path.extname(new URL(url).pathname).toLowerCase();
 
-  // Image extensions
-  if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico', '.bmp', '.avif'].includes(ext)) {
-    return 'image';
-  }
-
-  // Video extensions
-  if (['.mp4', '.webm', '.avi', '.mov', '.mkv', '.flv', '.m3u8', '.ts'].includes(ext)) {
-    return 'video';
-  }
-
-  // Video platforms (need yt-dlp)
-  if (urlLower.includes('youtube.com') || urlLower.includes('youtu.be') ||
-      urlLower.includes('bilibili.com') || urlLower.includes('twitter.com') ||
-      urlLower.includes('x.com') || urlLower.includes('tiktok.com') ||
-      urlLower.includes('vimeo.com') || urlLower.includes('twitch.tv')) {
-    return 'video';
-  }
-
-  // Document extensions
-  if (['.html', '.htm', '.json', '.xml', '.txt', '.md', '.markdown'].includes(ext)) {
-    return 'document';
-  }
-
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (VIDEO_PLATFORM_DOMAINS.some(d => urlLower.includes(d))) return 'video';
+  if (DOC_EXTENSIONS.has(ext)) return 'document';
   return 'binary';
 }
 
@@ -96,16 +82,7 @@ export function detectContentType(url: string, contentType?: string): 'image' | 
  */
 export function requiresYtdlp(url: string): boolean {
   const urlLower = url.toLowerCase();
-  return (
-    urlLower.includes('youtube.com') ||
-    urlLower.includes('youtu.be') ||
-    urlLower.includes('bilibili.com/video') ||
-    urlLower.includes('twitter.com') ||
-    urlLower.includes('x.com') ||
-    urlLower.includes('tiktok.com') ||
-    urlLower.includes('vimeo.com') ||
-    urlLower.includes('twitch.tv')
-  );
+  return VIDEO_PLATFORM_DOMAINS.some(d => urlLower.includes(d));
 }
 
 /**
@@ -142,14 +119,14 @@ export async function httpDownload(
       // Handle redirects
       if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         file.close();
-        fs.unlinkSync(tempPath);
-        httpDownload(response.headers.location, destPath, options).then(resolve);
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        httpDownload(resolveRedirectUrl(url, response.headers.location), destPath, options).then(resolve);
         return;
       }
 
       if (response.statusCode !== 200) {
         file.close();
-        fs.unlinkSync(tempPath);
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
         resolve({ success: false, size: 0, error: `HTTP ${response.statusCode}` });
         return;
       }
@@ -187,11 +164,15 @@ export async function httpDownload(
   });
 }
 
+export function resolveRedirectUrl(currentUrl: string, location: string): string {
+  return new URL(location, currentUrl).toString();
+}
+
 /**
  * Export cookies to Netscape format for yt-dlp.
  */
 export function exportCookiesToNetscape(
-  cookies: Array<{ name: string; value: string; domain: string; path?: string; secure?: boolean; httpOnly?: boolean }>,
+  cookies: BrowserCookie[],
   filePath: string,
 ): void {
   const lines = [
@@ -212,6 +193,10 @@ export function exportCookiesToNetscape(
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, lines.join('\n'));
+}
+
+export function formatCookieHeader(cookies: BrowserCookie[]): string {
+  return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
 }
 
 /**

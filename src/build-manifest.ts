@@ -18,7 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIS_DIR = path.resolve(__dirname, 'clis');
 const OUTPUT = path.resolve(__dirname, '..', 'dist', 'cli-manifest.json');
 
-interface ManifestEntry {
+export interface ManifestEntry {
   site: string;
   name: string;
   description: string;
@@ -28,19 +28,53 @@ interface ManifestEntry {
   args: Array<{
     name: string;
     type?: string;
-    default?: any;
+    default?: unknown;
     required?: boolean;
     positional?: boolean;
     help?: string;
     choices?: string[];
   }>;
   columns?: string[];
-  pipeline?: any[];
+  pipeline?: Record<string, unknown>[];
   timeout?: number;
   /** 'yaml' or 'ts' — determines how executeCommand loads the handler */
   type: 'yaml' | 'ts';
   /** Relative path from clis/ dir, e.g. 'bilibili/hot.yaml' or 'bilibili/search.js' */
   modulePath?: string;
+  /** Pre-navigation control — see CliCommand.navigateBefore */
+  navigateBefore?: boolean | string;
+}
+
+interface YamlArgDefinition {
+  type?: string;
+  default?: unknown;
+  required?: boolean;
+  positional?: boolean;
+  description?: string;
+  help?: string;
+  choices?: string[];
+}
+
+interface YamlCliDefinition {
+  site?: string;
+  name?: string;
+  description?: string;
+  domain?: string;
+  strategy?: string;
+  browser?: boolean;
+  args?: Record<string, YamlArgDefinition>;
+  columns?: string[];
+  pipeline?: Record<string, unknown>[];
+  timeout?: number;
+  navigateBefore?: boolean | string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function extractBalancedBlock(
@@ -114,7 +148,7 @@ export function parseTsArgsBlock(argsBlock: string): ManifestEntry['args'] {
   let cursor = 0;
 
   while (cursor < argsBlock.length) {
-    const nameMatch = argsBlock.slice(cursor).match(/\{\s*name\s*:\s*['"`](\w+)['"`]/);
+    const nameMatch = argsBlock.slice(cursor).match(/\{\s*name\s*:\s*['"`]([^'"`]+)['"`]/);
     if (!nameMatch || nameMatch.index === undefined) break;
 
     const objectStart = cursor + nameMatch.index;
@@ -127,7 +161,7 @@ export function parseTsArgsBlock(argsBlock: string): ManifestEntry['args'] {
     const helpMatch = body.match(/help\s*:\s*['"`]([^'"`]*)['"`]/);
     const positionalMatch = body.match(/positional\s*:\s*(true|false)/);
 
-    let defaultVal: any = undefined;
+    let defaultVal: unknown = undefined;
     if (defaultMatch) {
       const raw = defaultMatch[1].trim();
       if (raw === 'true') defaultVal = true;
@@ -156,21 +190,23 @@ export function parseTsArgsBlock(argsBlock: string): ManifestEntry['args'] {
 function scanYaml(filePath: string, site: string): ManifestEntry | null {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
-    const def = yaml.load(raw) as any;
-    if (!def || typeof def !== 'object') return null;
+    const def = yaml.load(raw) as YamlCliDefinition | null;
+    if (!isRecord(def)) return null;
+    const cliDef = def as YamlCliDefinition;
 
-    const strategyStr = def.strategy ?? (def.browser === false ? 'public' : 'cookie');
+    const strategyStr = cliDef.strategy ?? (cliDef.browser === false ? 'public' : 'cookie');
     const strategy = strategyStr.toUpperCase();
-    const browser = def.browser ?? (strategy !== 'PUBLIC');
+    const browser = cliDef.browser ?? (strategy !== 'PUBLIC');
 
     const args: ManifestEntry['args'] = [];
-    if (def.args && typeof def.args === 'object') {
-      for (const [argName, argDef] of Object.entries(def.args as Record<string, any>)) {
+    if (cliDef.args && typeof cliDef.args === 'object') {
+      for (const [argName, argDef] of Object.entries(cliDef.args)) {
         args.push({
           name: argName,
           type: argDef?.type ?? 'str',
           default: argDef?.default,
           required: argDef?.required ?? false,
+          positional: argDef?.positional === true || undefined,
           help: argDef?.description ?? argDef?.help ?? '',
           choices: argDef?.choices,
         });
@@ -178,43 +214,47 @@ function scanYaml(filePath: string, site: string): ManifestEntry | null {
     }
 
     return {
-      site: def.site ?? site,
-      name: def.name ?? path.basename(filePath, path.extname(filePath)),
-      description: def.description ?? '',
-      domain: def.domain,
+      site: cliDef.site ?? site,
+      name: cliDef.name ?? path.basename(filePath, path.extname(filePath)),
+      description: cliDef.description ?? '',
+      domain: cliDef.domain,
       strategy: strategy.toLowerCase(),
       browser,
       args,
-      columns: def.columns,
-      pipeline: def.pipeline,
-      timeout: def.timeout,
+      columns: cliDef.columns,
+      pipeline: cliDef.pipeline,
+      timeout: cliDef.timeout,
       type: 'yaml',
+      navigateBefore: cliDef.navigateBefore,
     };
-  } catch (err: any) {
-    process.stderr.write(`Warning: failed to parse ${filePath}: ${err.message}\n`);
+  } catch (err) {
+    process.stderr.write(`Warning: failed to parse ${filePath}: ${getErrorMessage(err)}\n`);
     return null;
   }
 }
 
-function scanTs(filePath: string, site: string): ManifestEntry {
+export function scanTs(filePath: string, site: string): ManifestEntry | null {
   // TS adapters self-register via cli() at import time.
   // We statically parse the source to extract metadata for the manifest stub.
   const baseName = path.basename(filePath, path.extname(filePath));
   const relativePath = `${site}/${baseName}.js`;
 
-  const entry: ManifestEntry = {
-    site,
-    name: baseName,
-    description: '',
-    strategy: 'cookie',
-    browser: true,
-    args: [],
-    type: 'ts',
-    modulePath: relativePath,
-  };
-
   try {
     const src = fs.readFileSync(filePath, 'utf-8');
+
+    // Helper/test modules should not appear as CLI commands in the manifest.
+    if (!/\bcli\s*\(/.test(src)) return null;
+
+    const entry: ManifestEntry = {
+      site,
+      name: baseName,
+      description: '',
+      strategy: 'cookie',
+      browser: true,
+      args: [],
+      type: 'ts',
+      modulePath: relativePath,
+    };
 
     // Extract description
     const descMatch = src.match(/description\s*:\s*['"`]([^'"`]*)['"`]/);
@@ -231,6 +271,7 @@ function scanTs(filePath: string, site: string): ManifestEntry {
     // Extract browser: false (some adapters bypass browser entirely)
     const browserMatch = src.match(/browser\s*:\s*(true|false)/);
     if (browserMatch) entry.browser = browserMatch[1] === 'true';
+    else entry.browser = entry.strategy !== 'public';
 
     // Extract columns
     const colMatch = src.match(/columns\s*:\s*\[([^\]]*)\]/);
@@ -243,15 +284,30 @@ function scanTs(filePath: string, site: string): ManifestEntry {
     if (argsBlock) {
       entry.args = parseTsArgsBlock(argsBlock);
     }
-  } catch {
-    // If parsing fails, fall back to empty metadata — module will self-register at runtime
-  }
 
-  return entry;
+    // Extract navigateBefore: false
+    const navMatch = src.match(/navigateBefore\s*:\s*(true|false)/);
+    if (navMatch) entry.navigateBefore = navMatch[1] === 'true' ? true : false;
+
+    return entry;
+  } catch (err) {
+    // If parsing fails, log a warning (matching scanYaml behaviour) and skip the entry.
+    process.stderr.write(`Warning: failed to scan ${filePath}: ${getErrorMessage(err)}\n`);
+    return null;
+  }
+}
+
+/**
+ * When both YAML and TS adapters exist for the same site/name,
+ * prefer the TS version (it self-registers and typically has richer logic).
+ */
+export function shouldReplaceManifestEntry(current: ManifestEntry, next: ManifestEntry): boolean {
+  if (current.type === next.type) return true;
+  return current.type === 'yaml' && next.type === 'ts';
 }
 
 export function buildManifest(): ManifestEntry[] {
-  const manifest: ManifestEntry[] = [];
+  const manifest = new Map<string, ManifestEntry>();
 
   if (fs.existsSync(CLIS_DIR)) {
     for (const site of fs.readdirSync(CLIS_DIR)) {
@@ -261,18 +317,37 @@ export function buildManifest(): ManifestEntry[] {
         const filePath = path.join(siteDir, file);
         if (file.endsWith('.yaml') || file.endsWith('.yml')) {
           const entry = scanYaml(filePath, site);
-          if (entry) manifest.push(entry);
+          if (entry) {
+            const key = `${entry.site}/${entry.name}`;
+            const existing = manifest.get(key);
+            if (!existing || shouldReplaceManifestEntry(existing, entry)) {
+              if (existing && existing.type !== entry.type) {
+                process.stderr.write(`⚠️  Duplicate adapter ${key}: ${existing.type} superseded by ${entry.type}\n`);
+              }
+              manifest.set(key, entry);
+            }
+          }
         } else if (
-          (file.endsWith('.ts') && !file.endsWith('.d.ts') && file !== 'index.ts') ||
-          (file.endsWith('.js') && !file.endsWith('.d.js') && file !== 'index.js')
+          (file.endsWith('.ts') && !file.endsWith('.d.ts') && !file.endsWith('.test.ts') && file !== 'index.ts') ||
+          (file.endsWith('.js') && !file.endsWith('.d.js') && !file.endsWith('.test.js') && file !== 'index.js')
         ) {
-          manifest.push(scanTs(filePath, site));
+          const entry = scanTs(filePath, site);
+          if (entry) {
+            const key = `${entry.site}/${entry.name}`;
+            const existing = manifest.get(key);
+            if (!existing || shouldReplaceManifestEntry(existing, entry)) {
+              if (existing && existing.type !== entry.type) {
+                process.stderr.write(`⚠️  Duplicate adapter ${key}: ${existing.type} superseded by ${entry.type}\n`);
+              }
+              manifest.set(key, entry);
+            }
+          }
         }
       }
     }
   }
 
-  return manifest;
+  return [...manifest.values()];
 }
 
 function main(): void {

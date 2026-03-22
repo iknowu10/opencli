@@ -7,13 +7,14 @@
 
 import chalk from 'chalk';
 import { checkDaemonStatus } from './browser/discover.js';
-import { PlaywrightMCP } from './browser/index.js';
-import { browserSession } from './runtime.js';
+import { BrowserBridge } from './browser/index.js';
+import { listSessions } from './browser/daemon-client.js';
 
 export type DoctorOptions = {
   fix?: boolean;
   yes?: boolean;
   live?: boolean;
+  sessions?: boolean;
   cliVersion?: string;
 };
 
@@ -28,6 +29,7 @@ export type DoctorReport = {
   daemonRunning: boolean;
   extensionConnected: boolean;
   connectivity?: ConnectivityResult;
+  sessions?: Array<{ workspace: string; windowId: number; tabCount: number; idleMsRemaining: number }>;
   issues: string[];
 };
 
@@ -37,7 +39,7 @@ export type DoctorReport = {
 export async function checkConnectivity(opts?: { timeout?: number }): Promise<ConnectivityResult> {
   const start = Date.now();
   try {
-    const mcp = new PlaywrightMCP();
+    const mcp = new BrowserBridge();
     const page = await mcp.connect({ timeout: opts?.timeout ?? 8 });
     // Try a simple eval to verify end-to-end connectivity
     await page.evaluate('1 + 1');
@@ -49,12 +51,17 @@ export async function checkConnectivity(opts?: { timeout?: number }): Promise<Co
 }
 
 export async function runBrowserDoctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
-  const status = await checkDaemonStatus();
-
+  // Run the live connectivity check first — it may auto-start the daemon as a
+  // side-effect, so we read daemon status only *after* all side-effects settle.
   let connectivity: ConnectivityResult | undefined;
   if (opts.live) {
     connectivity = await checkConnectivity();
   }
+
+  const status = await checkDaemonStatus();
+  const sessions = opts.sessions && status.running && status.extensionConnected
+    ? await listSessions() as Array<{ workspace: string; windowId: number; tabCount: number; idleMsRemaining: number }>
+    : undefined;
 
   const issues: string[] = [];
   if (!status.running) {
@@ -78,6 +85,7 @@ export async function runBrowserDoctor(opts: DoctorOptions = {}): Promise<Doctor
     daemonRunning: status.running,
     extensionConnected: status.extensionConnected,
     connectivity,
+    sessions,
     issues,
   };
 }
@@ -104,6 +112,17 @@ export function renderBrowserDoctorReport(report: DoctorReport): string {
     lines.push(`${chalk.dim('[SKIP]')} Connectivity: not tested (use --live)`);
   }
 
+  if (report.sessions) {
+    lines.push('', chalk.bold('Sessions:'));
+    if (report.sessions.length === 0) {
+      lines.push(chalk.dim('  • no active automation sessions'));
+    } else {
+      for (const session of report.sessions) {
+        lines.push(chalk.dim(`  • ${session.workspace} → window ${session.windowId}, tabs=${session.tabCount}, idle=${Math.ceil(session.idleMsRemaining / 1000)}s`));
+      }
+    }
+  }
+
   if (report.issues.length) {
     lines.push('', chalk.yellow('Issues:'));
     for (const issue of report.issues) {
@@ -115,21 +134,3 @@ export function renderBrowserDoctorReport(report: DoctorReport): string {
 
   return lines.join('\n');
 }
-
-// Backward compatibility exports (no-ops for things that no longer exist)
-export const PLAYWRIGHT_TOKEN_ENV = 'PLAYWRIGHT_MCP_EXTENSION_TOKEN';
-export function discoverExtensionToken(): string | null { return null; }
-export function checkExtensionInstalled(): { installed: boolean; browsers: string[] } { return { installed: false, browsers: [] }; }
-export function applyBrowserDoctorFix(): Promise<string[]> { return Promise.resolve([]); }
-export function getDefaultShellRcPath(): string { return ''; }
-export function getDefaultMcpConfigPaths(): string[] { return []; }
-export function readTokenFromShellContent(_content: string): string | null { return null; }
-export function upsertShellToken(content: string): string { return content; }
-export function upsertJsonConfigToken(content: string): string { return content; }
-export function readTomlConfigToken(_content: string): string | null { return null; }
-export function upsertTomlConfigToken(content: string): string { return content; }
-export function shortenPath(p: string): string { return p; }
-export function toolName(_p: string): string { return ''; }
-export function fileExists(filePath: string): boolean { try { return require('node:fs').existsSync(filePath); } catch { return false; } }
-export function writeFileWithMkdir(_p: string, _c: string): void {}
-export async function checkTokenConnectivity(opts?: { timeout?: number }): Promise<ConnectivityResult> { return checkConnectivity(opts); }

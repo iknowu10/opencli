@@ -6,15 +6,14 @@
  */
 
 export { Page } from './page.js';
-export { PlaywrightMCP } from './mcp.js';
+export { BrowserBridge, BrowserBridge as PlaywrightMCP } from './mcp.js';
+export { CDPBridge } from './cdp.js';
 export { isDaemonRunning } from './daemon-client.js';
-
-// Backward compatibility: getTokenFingerprint is no longer needed but kept as no-op export
-export function getTokenFingerprint(_token: string | undefined): string | null {
-  return null;
-}
+export { generateSnapshotJs, scrollToRefJs, getFormStateJs } from './dom-snapshot.js';
+export type { SnapshotOptions } from './dom-snapshot.js';
 
 import { extractTabEntries, diffTabIndexes, appendLimited } from './tabs.js';
+import { __test__ as cdpTest } from './cdp.js';
 import { withTimeoutMs } from '../runtime.js';
 
 export const __test__ = {
@@ -22,4 +21,6 @@ export const __test__ = {
   diffTabIndexes,
   appendLimited,
   withTimeoutMs,
+  selectCDPTarget: cdpTest.selectCDPTarget,
+  scoreCDPTarget: cdpTest.scoreCDPTarget,
 };
