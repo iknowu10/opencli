@@ -8,15 +8,22 @@ import * as path from 'node:path';
 import * as https from 'node:https';
 import * as http from 'node:http';
 import * as os from 'node:os';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { URL } from 'node:url';
 import type { ProgressBar } from './progress.js';
 import { isBinaryInstalled } from '../external.js';
+import type { BrowserCookie } from '../types.js';
+import { getErrorMessage } from '../errors.js';
+
+export type { BrowserCookie } from '../types.js';
 
 export interface DownloadOptions {
   cookies?: string;
   headers?: Record<string, string>;
   timeout?: number;
   onProgress?: (received: number, total: number) => void;
+  maxRedirects?: number;
 }
 
 export interface YtdlpOptions {
@@ -27,24 +34,9 @@ export interface YtdlpOptions {
   onProgress?: (percent: number) => void;
 }
 
-export interface BrowserCookie {
-  name: string;
-  value: string;
-  domain: string;
-  path?: string;
-  secure?: boolean;
-  httpOnly?: boolean;
-  expirationDate?: number;
-}
-
 /** Check if yt-dlp is available in PATH. */
 export function checkYtdlp(): boolean {
   return isBinaryInstalled('yt-dlp');
-}
-
-/** Check if ffmpeg is available in PATH. */
-export function checkFfmpeg(): boolean {
-  return isBinaryInstalled('ffmpeg');
 }
 
 /** Domains that host video content and can be downloaded via yt-dlp. */
@@ -92,15 +84,16 @@ export async function httpDownload(
   url: string,
   destPath: string,
   options: DownloadOptions = {},
+  redirectCount = 0,
 ): Promise<{ success: boolean; size: number; error?: string }> {
-  const { cookies, headers = {}, timeout = 30000, onProgress } = options;
+  const { cookies, headers = {}, timeout = 30000, onProgress, maxRedirects = 10 } = options;
 
   return new Promise((resolve) => {
     const parsedUrl = new URL(url);
     const protocol = parsedUrl.protocol === 'https:' ? https : http;
 
     const requestHeaders: Record<string, string> = {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
       ...headers,
     };
 
@@ -108,64 +101,97 @@ export async function httpDownload(
       requestHeaders['Cookie'] = cookies;
     }
 
-    // Ensure directory exists
-    const dir = path.dirname(destPath);
-    fs.mkdirSync(dir, { recursive: true });
-
     const tempPath = `${destPath}.tmp`;
-    const file = fs.createWriteStream(tempPath);
+    let settled = false;
+
+    const finish = (result: { success: boolean; size: number; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    const cleanupTempFile = async () => {
+      try {
+        await fs.promises.rm(tempPath, { force: true });
+      } catch {
+        // Ignore cleanup errors so the original failure is preserved.
+      }
+    };
 
     const request = protocol.get(url, { headers: requestHeaders, timeout }, (response) => {
-      // Handle redirects
-      if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        file.close();
-        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-        httpDownload(resolveRedirectUrl(url, response.headers.location), destPath, options).then(resolve);
-        return;
-      }
+      void (async () => {
+        // Handle redirects before creating any file handles.
+        if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          response.resume();
+          if (redirectCount >= maxRedirects) {
+            finish({ success: false, size: 0, error: `Too many redirects (> ${maxRedirects})` });
+            return;
+          }
+          const redirectUrl = resolveRedirectUrl(url, response.headers.location);
+          const originalHost = new URL(url).hostname;
+          const redirectHost = new URL(redirectUrl).hostname;
+          const redirectOptions = originalHost === redirectHost
+            ? options
+            : { ...options, cookies: undefined, headers: stripCookieHeaders(options.headers) };
+          finish(await httpDownload(
+            redirectUrl,
+            destPath,
+            redirectOptions,
+            redirectCount + 1,
+          ));
+          return;
+        }
 
-      if (response.statusCode !== 200) {
-        file.close();
-        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-        resolve({ success: false, size: 0, error: `HTTP ${response.statusCode}` });
-        return;
-      }
+        if (response.statusCode !== 200) {
+          response.resume();
+          finish({ success: false, size: 0, error: `HTTP ${response.statusCode}` });
+          return;
+        }
 
-      const totalSize = parseInt(response.headers['content-length'] || '0', 10);
-      let received = 0;
+        const totalSize = parseInt(response.headers['content-length'] || '0', 10);
+        let received = 0;
+        const progressStream = new Transform({
+          transform(chunk, _encoding, callback) {
+            received += chunk.length;
+            if (onProgress) onProgress(received, totalSize);
+            callback(null, chunk);
+          },
+        });
 
-      response.on('data', (chunk: Buffer) => {
-        received += chunk.length;
-        if (onProgress) onProgress(received, totalSize);
-      });
-
-      response.pipe(file);
-
-      file.on('finish', () => {
-        file.close();
-        // Rename temp file to final destination
-        fs.renameSync(tempPath, destPath);
-        resolve({ success: true, size: received });
-      });
+        try {
+          await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
+          await pipeline(response, progressStream, fs.createWriteStream(tempPath));
+          await fs.promises.rename(tempPath, destPath);
+          finish({ success: true, size: received });
+        } catch (err) {
+          await cleanupTempFile();
+          finish({ success: false, size: 0, error: getErrorMessage(err) });
+        }
+      })();
     });
 
     request.on('error', (err) => {
-      file.close();
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-      resolve({ success: false, size: 0, error: err.message });
+      void (async () => {
+        await cleanupTempFile();
+        finish({ success: false, size: 0, error: err.message });
+      })();
     });
 
     request.on('timeout', () => {
-      request.destroy();
-      file.close();
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-      resolve({ success: false, size: 0, error: 'Timeout' });
+      request.destroy(new Error('Timeout'));
     });
   });
 }
 
 export function resolveRedirectUrl(currentUrl: string, location: string): string {
   return new URL(location, currentUrl).toString();
+}
+
+function stripCookieHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers) return headers;
+  return Object.fromEntries(
+    Object.entries(headers).filter(([key]) => key.toLowerCase() !== 'cookie'),
+  );
 }
 
 /**
@@ -188,7 +214,9 @@ export function exportCookiesToNetscape(
     const cookiePath = cookie.path || '/';
     const secure = cookie.secure ? 'TRUE' : 'FALSE';
     const expiry = Math.floor(Date.now() / 1000) + 86400 * 365; // 1 year from now
-    lines.push(`${domain}\t${includeSubdomains}\t${cookiePath}\t${secure}\t${expiry}\t${cookie.name}\t${cookie.value}`);
+    const safeName = cookie.name.replace(/[\t\n\r]/g, '');
+    const safeValue = cookie.value.replace(/[\t\n\r]/g, '');
+    lines.push(`${domain}\t${includeSubdomains}\t${cookiePath}\t${secure}\t${expiry}\t${safeName}\t${safeValue}`);
   }
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -226,8 +254,13 @@ export async function ytdlpDownload(
       '--progress',
     ];
 
-    if (cookiesFile && fs.existsSync(cookiesFile)) {
-      args.push('--cookies', cookiesFile);
+    if (cookiesFile) {
+      if (fs.existsSync(cookiesFile)) {
+        args.push('--cookies', cookiesFile);
+      } else {
+        console.error(`[download] Cookies file not found: ${cookiesFile}, falling back to browser cookies`);
+        args.push('--cookies-from-browser', 'chrome');
+      }
     } else {
       // Try to use browser cookies
       args.push('--cookies-from-browser', 'chrome');
@@ -319,8 +352,8 @@ export async function saveDocument(
 
     fs.writeFileSync(destPath, output, 'utf-8');
     return { success: true, size: Buffer.byteLength(output, 'utf-8') };
-  } catch (err: any) {
-    return { success: false, size: 0, error: err.message };
+  } catch (err) {
+    return { success: false, size: 0, error: getErrorMessage(err) };
   }
 }
 

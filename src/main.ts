@@ -3,12 +3,23 @@
  * opencli — Make any website your CLI. AI-powered.
  */
 
+// Ensure standard system paths are available for child processes.
+// Some environments (GUI apps, cron, IDE terminals) launch with a minimal PATH
+// that excludes /usr/local/bin, /usr/sbin, etc., causing external CLIs to fail.
+if (process.platform !== 'win32') {
+  const std = ['/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'];
+  const cur = new Set((process.env.PATH ?? '').split(':').filter(Boolean));
+  for (const p of std) cur.add(p);
+  process.env.PATH = [...cur].join(':');
+}
+
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverClis, discoverPlugins } from './discovery.js';
 import { getCompletions } from './completion.js';
 import { runCli } from './cli.js';
+import { emitHook } from './hooks.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,4 +50,5 @@ if (getCompIdx !== -1) {
   process.exit(0);
 }
 
+await emitHook('onStartup', { command: '__startup__', args: {} });
 runCli(BUILTIN_CLIS, USER_CLIS);

@@ -15,6 +15,7 @@ import { PKG_VERSION } from './version.js';
 import { printCompletionScript } from './completion.js';
 import { loadExternalClis, executeExternalCli, installExternalCli, registerExternalCli, isBinaryInstalled } from './external.js';
 import { registerAllCommands } from './commanderAdapter.js';
+import { getErrorMessage } from './errors.js';
 
 export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
   const program = new Command();
@@ -173,14 +174,36 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
       const r = await generateCliFromUrl({
         url,
         BrowserFactory: getBrowserFactory(),
-        builtinClis: BUILTIN_CLIS,
-        userClis: USER_CLIS,
         goal: opts.goal,
         site: opts.site,
         workspace,
       });
       console.log(renderGenerateSummary(r));
       process.exitCode = r.ok ? 0 : 1;
+    });
+
+  // ── Built-in: record ─────────────────────────────────────────────────────
+
+  program
+    .command('record')
+    .description('Record API calls from a live browser session → generate YAML candidates')
+    .argument('<url>', 'URL to open and record')
+    .option('--site <name>', 'Site name (inferred from URL if omitted)')
+    .option('--out <dir>', 'Output directory for candidates')
+    .option('--poll <ms>', 'Poll interval in milliseconds', '2000')
+    .option('--timeout <ms>', 'Auto-stop after N milliseconds (default: 60000)', '60000')
+    .action(async (url, opts) => {
+      const { recordSession, renderRecordSummary } = await import('./record.js');
+      const result = await recordSession({
+        BrowserFactory: getBrowserFactory(),
+        url,
+        site: opts.site,
+        outDir: opts.out,
+        pollMs: parseInt(opts.poll, 10),
+        timeoutMs: parseInt(opts.timeout, 10),
+      });
+      console.log(renderRecordSummary(result));
+      process.exitCode = result.candidateCount > 0 ? 0 : 1;
     });
 
   program
@@ -202,25 +225,17 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
       console.log(renderCascadeResult(result));
     });
 
-  // ── Built-in: doctor / setup / completion ─────────────────────────────────
+  // ── Built-in: doctor / completion ──────────────────────────────────────────
 
   program
     .command('doctor')
     .description('Diagnose opencli browser bridge connectivity')
-    .option('--live', 'Test browser connectivity (requires Chrome running)', false)
+    .option('--no-live', 'Skip live browser connectivity test')
     .option('--sessions', 'Show active automation sessions', false)
     .action(async (opts) => {
       const { runBrowserDoctor, renderBrowserDoctorReport } = await import('./doctor.js');
       const report = await runBrowserDoctor({ live: opts.live, sessions: opts.sessions, cliVersion: PKG_VERSION });
       console.log(renderBrowserDoctorReport(report));
-    });
-
-  program
-    .command('setup')
-    .description('Interactive setup: verify browser bridge connectivity')
-    .action(async () => {
-      const { runSetup } = await import('./setup.js');
-      await runSetup({ cliVersion: PKG_VERSION });
     });
 
   program
@@ -241,12 +256,13 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
     .argument('<source>', 'Plugin source (e.g. github:user/repo)')
     .action(async (source: string) => {
       const { installPlugin } = await import('./plugin.js');
+      const { discoverPlugins } = await import('./discovery.js');
       try {
         const name = installPlugin(source);
-        console.log(chalk.green(`✅ Plugin "${name}" installed successfully.`));
-        console.log(chalk.dim(`   Restart opencli to use the new commands.`));
-      } catch (err: any) {
-        console.error(chalk.red(`Error: ${err.message}`));
+        await discoverPlugins();
+        console.log(chalk.green(`✅ Plugin "${name}" installed successfully. Commands are ready to use.`));
+      } catch (err) {
+        console.error(chalk.red(`Error: ${getErrorMessage(err)}`));
         process.exitCode = 1;
       }
     });
@@ -260,11 +276,73 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
       try {
         uninstallPlugin(name);
         console.log(chalk.green(`✅ Plugin "${name}" uninstalled.`));
-      } catch (err: any) {
-        console.error(chalk.red(`Error: ${err.message}`));
+      } catch (err) {
+        console.error(chalk.red(`Error: ${getErrorMessage(err)}`));
         process.exitCode = 1;
       }
     });
+
+  pluginCmd
+    .command('update')
+    .description('Update a plugin (or all plugins) to the latest version')
+    .argument('[name]', 'Plugin name (required unless --all is passed)')
+    .option('--all', 'Update all installed plugins')
+    .action(async (name: string | undefined, opts: { all?: boolean }) => {
+      if (!name && !opts.all) {
+        console.error(chalk.red('Error: Please specify a plugin name or use the --all flag.'));
+        process.exitCode = 1;
+        return;
+      }
+      if (name && opts.all) {
+        console.error(chalk.red('Error: Cannot specify both a plugin name and --all.'));
+        process.exitCode = 1;
+        return;
+      }
+
+      const { updatePlugin, updateAllPlugins } = await import('./plugin.js');
+      const { discoverPlugins } = await import('./discovery.js');
+      if (opts.all) {
+        const results = updateAllPlugins();
+        if (results.length > 0) {
+          await discoverPlugins();
+        }
+
+        let hasErrors = false;
+        console.log(chalk.bold('  Update Results:'));
+        for (const result of results) {
+          if (result.success) {
+            console.log(`  ${chalk.green('✓')} ${result.name}`);
+            continue;
+          }
+          hasErrors = true;
+          console.log(`  ${chalk.red('✗')} ${result.name} — ${chalk.dim(result.error)}`);
+        }
+
+        if (results.length === 0) {
+          console.log(chalk.dim('  No plugins installed.'));
+          return;
+        }
+
+        console.log();
+        if (hasErrors) {
+          console.error(chalk.red('Completed with some errors.'));
+          process.exitCode = 1;
+        } else {
+          console.log(chalk.green('✅ All plugins updated successfully.'));
+        }
+        return;
+      }
+
+      try {
+        updatePlugin(name!);
+        await discoverPlugins();
+        console.log(chalk.green(`✅ Plugin "${name}" updated successfully.`));
+      } catch (err) {
+        console.error(chalk.red(`Error: ${getErrorMessage(err)}`));
+        process.exitCode = 1;
+      }
+    });
+
 
   pluginCmd
     .command('list')
@@ -291,9 +369,10 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
       console.log(chalk.bold('  Installed plugins'));
       console.log();
       for (const p of plugins) {
+        const version = p.version ? chalk.green(` @${p.version}`) : '';
         const cmds = p.commands.length > 0 ? chalk.dim(` (${p.commands.join(', ')})`) : '';
         const src = p.source ? chalk.dim(` ← ${p.source}`) : '';
-        console.log(`  ${chalk.cyan(p.name)}${cmds}${src}`);
+        console.log(`  ${chalk.cyan(p.name)}${version}${cmds}${src}`);
       }
       console.log();
       console.log(chalk.dim(`  ${plugins.length} plugin(s) installed`));
@@ -336,8 +415,8 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
     })();
     try {
       executeExternalCli(name, args, externalClis);
-    } catch (err: any) {
-      console.error(chalk.red(`Error: ${err.message}`));
+    } catch (err) {
+      console.error(chalk.red(`Error: ${getErrorMessage(err)}`));
       process.exitCode = 1;
     }
   }
@@ -373,29 +452,17 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
   registerAllCommands(program, siteGroups);
 
   // ── Unknown command fallback ──────────────────────────────────────────────
-
-  const DENY_LIST = new Set([
-    'rm', 'sudo', 'dd', 'mkfs', 'fdisk', 'shutdown', 'reboot',
-    'kill', 'killall', 'chmod', 'chown', 'passwd', 'su', 'mount',
-    'umount', 'format', 'diskutil',
-  ]);
+  // Security: do NOT auto-discover and register arbitrary system binaries.
+  // Only explicitly registered external CLIs (via `opencli register`) are allowed.
 
   program.on('command:*', (operands: string[]) => {
     const binary = operands[0];
-    if (DENY_LIST.has(binary)) {
-      console.error(chalk.red(`Refusing to register system command '${binary}'.`));
-      process.exitCode = 1;
-      return;
-    }
+    console.error(chalk.red(`error: unknown command '${binary}'`));
     if (isBinaryInstalled(binary)) {
-      console.log(chalk.cyan(`🔹 Auto-discovered local CLI '${binary}'. Registering...`));
-      registerExternalCli(binary);
-      passthroughExternal(binary);
-    } else {
-      console.error(chalk.red(`error: unknown command '${binary}'`));
-      program.outputHelp();
-      process.exitCode = 1;
+      console.error(chalk.dim(`  Tip: '${binary}' exists on your PATH. Use 'opencli register ${binary}' to add it as an external CLI.`));
     }
+    program.outputHelp();
+    process.exitCode = 1;
   });
 
   program.parse();

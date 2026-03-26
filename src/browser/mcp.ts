@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import type { IPage } from '../types.js';
 import { Page } from './page.js';
 import { isDaemonRunning, isExtensionConnected } from './daemon-client.js';
+import { DEFAULT_DAEMON_PORT } from '../constants.js';
 
 const DAEMON_SPAWN_TIMEOUT = 10000; // 10s to wait for daemon + extension
 
@@ -55,7 +56,9 @@ export class BrowserBridge {
   }
 
   private async _ensureDaemon(timeoutSeconds?: number): Promise<void> {
-    const timeoutMs = Math.max(1, timeoutSeconds ?? Math.ceil(DAEMON_SPAWN_TIMEOUT / 1000)) * 1000;
+    // Use default if not provided, zero, or negative
+    const effectiveSeconds = (timeoutSeconds && timeoutSeconds > 0) ? timeoutSeconds : Math.ceil(DAEMON_SPAWN_TIMEOUT / 1000);
+    const timeoutMs = effectiveSeconds * 1000;
 
     if (await isExtensionConnected()) return;
     if (await isDaemonRunning()) {
@@ -110,10 +113,7 @@ export class BrowserBridge {
     throw new Error(
       'Failed to start opencli daemon. Try running manually:\n' +
       `  node ${daemonPath}\n` +
-      'Make sure port 19825 is available.',
+      `Make sure port ${DEFAULT_DAEMON_PORT} is available.`,
     );
   }
 }
-
-/** @deprecated Use BrowserBridge instead */
-export const PlaywrightMCP = BrowserBridge;

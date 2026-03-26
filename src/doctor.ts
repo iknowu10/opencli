@@ -6,9 +6,11 @@
  */
 
 import chalk from 'chalk';
+import { DEFAULT_DAEMON_PORT } from './constants.js';
 import { checkDaemonStatus } from './browser/discover.js';
 import { BrowserBridge } from './browser/index.js';
 import { listSessions } from './browser/daemon-client.js';
+import { getErrorMessage } from './errors.js';
 
 export type DoctorOptions = {
   fix?: boolean;
@@ -45,13 +47,25 @@ export async function checkConnectivity(opts?: { timeout?: number }): Promise<Co
     await page.evaluate('1 + 1');
     await mcp.close();
     return { ok: true, durationMs: Date.now() - start };
-  } catch (err: any) {
-    return { ok: false, error: err?.message ?? String(err), durationMs: Date.now() - start };
+  } catch (err) {
+    return { ok: false, error: getErrorMessage(err), durationMs: Date.now() - start };
   }
 }
 
 export async function runBrowserDoctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
-  // Run the live connectivity check first — it may auto-start the daemon as a
+  // Try to auto-start daemon if it's not running, so we show accurate status.
+  let initialStatus = await checkDaemonStatus();
+  if (!initialStatus.running) {
+    try {
+      const mcp = new BrowserBridge();
+      await mcp.connect({ timeout: 5 });
+      await mcp.close();
+    } catch {
+      // Auto-start failed; we'll report it below.
+    }
+  }
+
+  // Run the live connectivity check — it may also auto-start the daemon as a
   // side-effect, so we read daemon status only *after* all side-effects settle.
   let connectivity: ConnectivityResult | undefined;
   if (opts.live) {
@@ -95,7 +109,7 @@ export function renderBrowserDoctorReport(report: DoctorReport): string {
 
   // Daemon status
   const daemonIcon = report.daemonRunning ? chalk.green('[OK]') : chalk.red('[MISSING]');
-  lines.push(`${daemonIcon} Daemon: ${report.daemonRunning ? 'running on port 19825' : 'not running'}`);
+  lines.push(`${daemonIcon} Daemon: ${report.daemonRunning ? `running on port ${DEFAULT_DAEMON_PORT}` : 'not running'}`);
 
   // Extension status
   const extIcon = report.extensionConnected ? chalk.green('[OK]') : chalk.yellow('[MISSING]');
@@ -109,7 +123,7 @@ export function renderBrowserDoctorReport(report: DoctorReport): string {
       : `failed (${report.connectivity.error ?? 'unknown'})`;
     lines.push(`${connIcon} Connectivity: ${detail}`);
   } else {
-    lines.push(`${chalk.dim('[SKIP]')} Connectivity: not tested (use --live)`);
+    lines.push(`${chalk.dim('[SKIP]')} Connectivity: skipped (--no-live)`);
   }
 
   if (report.sessions) {

@@ -16,11 +16,7 @@ import { type CliCommand, fullName, getRegistry } from './registry.js';
 import { formatRegistryHelpText } from './serialization.js';
 import { render as renderOutput } from './output.js';
 import { executeCommand } from './execution.js';
-import { CliError } from './errors.js';
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import { CliError, ERROR_ICONS, getErrorMessage } from './errors.js';
 
 /**
  * Register a single CliCommand as a Commander subcommand.
@@ -28,7 +24,8 @@ function getErrorMessage(error: unknown): string {
 export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): void {
   if (siteCmd.commands.some((c: Command) => c.name() === cmd.name)) return;
 
-  const subCmd = siteCmd.command(cmd.name).description(cmd.description);
+  const deprecatedSuffix = cmd.deprecated ? ' [deprecated]' : '';
+  const subCmd = siteCmd.command(cmd.name).description(`${cmd.description}${deprecatedSuffix}`);
 
   // Register positional args first, then named options
   const positionalArgs: typeof cmd.args = [];
@@ -73,6 +70,11 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       const verbose = optionsRecord.verbose === true;
       const format = typeof optionsRecord.format === 'string' ? optionsRecord.format : 'table';
       if (verbose) process.env.OPENCLI_VERBOSE = '1';
+      if (cmd.deprecated) {
+        const message = typeof cmd.deprecated === 'string' ? cmd.deprecated : `${fullName(cmd)} is deprecated.`;
+        const replacement = cmd.replacedBy ? ` Use ${cmd.replacedBy} instead.` : '';
+        console.error(chalk.yellow(`Deprecated: ${message}${replacement}`));
+      }
 
       const result = await executeCommand(cmd, kwargs, verbose);
 
@@ -90,8 +92,9 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       });
     } catch (err) {
       if (err instanceof CliError) {
-        console.error(chalk.red(`Error [${err.code}]: ${err.message}`));
-        if (err.hint) console.error(chalk.yellow(`Hint: ${err.hint}`));
+        const icon = ERROR_ICONS[err.code] ?? '⚠️';
+        console.error(chalk.red(`${icon} ${err.message}`));
+        if (err.hint) console.error(chalk.yellow(`→ ${err.hint}`));
       } else if (optionsRecord.verbose === true && err instanceof Error && err.stack) {
         console.error(chalk.red(err.stack));
       } else {
