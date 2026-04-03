@@ -76,7 +76,7 @@ cli({
     { name: 'start', default: '', help: 'Start date YYYY-MM-DD (overrides timeframe)' },
     { name: 'end', default: '', help: 'End date YYYY-MM-DD (overrides timeframe)' },
   ],
-  columns: ['member', 'merged', 'open', 'closed', 'reviewed', 'period'],
+  columns: ['member', 'merged', 'open', 'reviewed', 'period'],
   func: async (_page, kwargs) => {
     const teamName = kwargs.team || 'Interstellar';
     const team = TEAMS[teamName];
@@ -119,9 +119,9 @@ cli({
     const allReviews: any[] = reviewData?.pullRequestReviews ?? [];
 
     // Aggregate per member
-    const stats: Record<string, { merged: number; open: number; closed: number; reviewed: number }> = {};
+    const stats: Record<string, { merged: number; open: number; reviewed: number }> = {};
     for (const id of targetIds) {
-      stats[id] = { merged: 0, open: 0, closed: 0, reviewed: 0 };
+      stats[id] = { merged: 0, open: 0, reviewed: 0 };
     }
 
     for (const pr of authored) {
@@ -129,7 +129,6 @@ cli({
       if (authorId && stats[authorId]) {
         if (pr.status === 'MERGED') stats[authorId].merged++;
         else if (pr.status === 'OPEN') stats[authorId].open++;
-        else if (pr.status === 'CLOSED') stats[authorId].closed++;
       }
     }
 
@@ -156,7 +155,6 @@ cli({
       member:   nameById[id] ?? id,
       merged:   stats[id].merged,
       open:     stats[id].open,
-      closed:   stats[id].closed,
       reviewed: stats[id].reviewed,
       period,
     }));
