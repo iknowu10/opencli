@@ -16,13 +16,7 @@ export default defineConfig({
       {
         test: {
           name: 'adapter',
-          include: [
-            'src/clis/bilibili/**/*.test.ts',
-            'src/clis/linux-do/**/*.test.ts',
-            'src/clis/zhihu/**/*.test.ts',
-            'src/clis/v2ex/**/*.test.ts',
-            'src/clis/weread/**/*.test.ts',
-          ],
+          include: ['src/clis/**/*.test.ts'],
           sequence: { groupOrder: 1 },
         },
       },
@@ -31,6 +25,7 @@ export default defineConfig({
           name: 'e2e',
           include: [
             'tests/e2e/browser-public.test.ts',
+            'tests/e2e/band-auth.test.ts',
             'tests/e2e/public-commands.test.ts',
             'tests/e2e/management.test.ts',
             'tests/e2e/output-formats.test.ts',

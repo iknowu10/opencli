@@ -1,5 +1,8 @@
 import { AuthRequiredError, CommandExecutionError } from '../../errors.js';
 import { cli, Strategy } from '../../registry.js';
+import { resolveTwitterQueryId } from './shared.js';
+
+const TWEET_RESULT_BY_REST_ID_QUERY_ID = '7xflPyRiUxGVbJd4uWmbfg';
 
 cli({
   site: 'twitter',
@@ -13,14 +16,45 @@ cli({
   ],
   columns: ['title', 'author', 'content', 'url'],
   func: async (page, kwargs) => {
-    // Extract tweet ID from URL if needed
+    // Extract tweet ID from URL if needed.
+    // Article URLs (x.com/i/article/{articleId}) use a different ID than
+    // tweet status URLs — the GraphQL endpoint needs the parent tweet ID.
     let tweetId = kwargs['tweet-id'];
+    const isArticleUrl = /\/article\/\d+/.test(tweetId);
     const urlMatch = tweetId.match(/\/(?:status|article)\/(\d+)/);
     if (urlMatch) tweetId = urlMatch[1];
+
+    if (isArticleUrl) {
+      // Navigate to the article page and resolve the parent tweet ID from DOM
+      await page.goto(`https://x.com/i/article/${tweetId}`);
+      await page.wait(3);
+      const resolvedId = await page.evaluate(`
+        (function() {
+          var links = document.querySelectorAll('a[href*="/status/"]');
+          for (var i = 0; i < links.length; i++) {
+            var m = links[i].href.match(/\\/status\\/(\\d+)/);
+            if (m) return m[1];
+          }
+          var og = document.querySelector('meta[property="og:url"]');
+          if (og && og.content) {
+            var m2 = og.content.match(/\\/status\\/(\\d+)/);
+            if (m2) return m2[1];
+          }
+          return null;
+        })()
+      `);
+      if (!resolvedId || typeof resolvedId !== 'string') {
+        throw new CommandExecutionError(
+          `Could not resolve article ${tweetId} to a tweet ID. The article page may not contain a linked tweet.`,
+        );
+      }
+      tweetId = resolvedId;
+    }
 
     // Navigate to the tweet page for cookie context
     await page.goto(`https://x.com/i/status/${tweetId}`);
     await page.wait(3);
+    const queryId = await resolveTwitterQueryId(page, 'TweetResultByRestId', TWEET_RESULT_BY_REST_ID_QUERY_ID);
 
     const result = await page.evaluate(`
       async () => {
@@ -56,34 +90,7 @@ cli({
           withArticlePlainText: true,
         });
 
-        // Dynamically resolve queryId: GitHub community source → JS bundle scan → hardcoded fallback
-        async function resolveQueryId(operationName, fallbackId) {
-          try {
-            const ghResp = await fetch('https://raw.githubusercontent.com/fa0311/twitter-openapi/refs/heads/main/src/config/placeholder.json');
-            if (ghResp.ok) {
-              const data = await ghResp.json();
-              const entry = data[operationName];
-              if (entry && entry.queryId) return entry.queryId;
-            }
-          } catch {}
-          try {
-            const scripts = performance.getEntriesByType('resource')
-              .filter(r => r.name.includes('client-web') && r.name.endsWith('.js'))
-              .map(r => r.name);
-            for (const scriptUrl of scripts.slice(0, 15)) {
-              try {
-                const text = await (await fetch(scriptUrl)).text();
-                const re = new RegExp('queryId:"([A-Za-z0-9_-]+)"[^}]{0,200}operationName:"' + operationName + '"');
-                const m = text.match(re);
-                if (m) return m[1];
-              } catch {}
-            }
-          } catch {}
-          return fallbackId;
-        }
-
-        const queryId = await resolveQueryId('TweetResultByRestId', '7xflPyRiUxGVbJd4uWmbfg');
-        const url = '/i/api/graphql/' + queryId + '/TweetResultByRestId?variables='
+        const url = '/i/api/graphql/' + ${JSON.stringify(queryId)} + '/TweetResultByRestId?variables='
           + encodeURIComponent(variables)
           + '&features=' + encodeURIComponent(features)
           + '&fieldToggles=' + encodeURIComponent(fieldToggles);

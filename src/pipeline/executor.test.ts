@@ -20,8 +20,6 @@ function createMockPage(overrides: Partial<IPage> = {}): IPage {
     getFormState: vi.fn().mockResolvedValue({}),
     wait: vi.fn(),
     tabs: vi.fn().mockResolvedValue([]),
-    closeTab: vi.fn(),
-    newTab: vi.fn(),
     selectTab: vi.fn(),
     networkRequests: vi.fn().mockResolvedValue([]),
     consoleMessages: vi.fn().mockResolvedValue(''),
@@ -31,6 +29,7 @@ function createMockPage(overrides: Partial<IPage> = {}): IPage {
     installInterceptor: vi.fn(),
     getInterceptedRequests: vi.fn().mockResolvedValue([]),
     screenshot: vi.fn().mockResolvedValue(''),
+    waitForCapture: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
