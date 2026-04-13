@@ -24,7 +24,6 @@ import {
   waitForDomStableJs,
 } from './dom-helpers.js';
 import { formatSnapshot } from '../snapshotFormatter.js';
-
 export abstract class BasePage implements IPage {
   protected _lastUrl: string | null = null;
   /** Cached previous snapshot hashes for incremental diff marking */
@@ -34,6 +33,27 @@ export abstract class BasePage implements IPage {
 
   abstract goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void>;
   abstract evaluate(js: string): Promise<unknown>;
+
+  /**
+   * Safely evaluate JS with pre-serialized arguments.
+   * Each key in `args` becomes a `const` declaration with JSON-serialized value,
+   * prepended to the JS code. Prevents injection by design.
+   *
+   * Usage:
+   *   page.evaluateWithArgs(`(async () => { return sym; })()`, { sym: userInput })
+   */
+  async evaluateWithArgs(js: string, args: Record<string, unknown>): Promise<unknown> {
+    const declarations = Object.entries(args)
+      .map(([key, value]) => {
+        if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) {
+          throw new Error(`evaluateWithArgs: invalid key "${key}"`);
+        }
+        return `const ${key} = ${JSON.stringify(value)};`;
+      })
+      .join('\n');
+    return this.evaluate(`${declarations}\n${js}`);
+  }
+
   abstract getCookies(opts?: { domain?: string; url?: string }): Promise<BrowserCookie[]>;
   abstract screenshot(options?: ScreenshotOptions): Promise<string>;
   abstract tabs(): Promise<unknown[]>;
@@ -133,7 +153,7 @@ export abstract class BasePage implements IPage {
 
   async snapshot(opts: SnapshotOptions = {}): Promise<unknown> {
     const snapshotJs = generateSnapshotJs({
-      viewportExpand: opts.viewportExpand ?? 800,
+      viewportExpand: opts.viewportExpand ?? 2000,
       maxDepth: Math.max(1, Math.min(Number(opts.maxDepth) || 50, 200)),
       interactiveOnly: opts.interactive ?? false,
       maxTextLength: opts.maxTextLength ?? 120,
@@ -152,7 +172,11 @@ export abstract class BasePage implements IPage {
         // Non-fatal: diff is best-effort
       }
       return result;
-    } catch {
+    } catch (err) {
+      // Log snapshot failure for debugging, then fallback to basic accessibility tree
+      if (process.env.DEBUG_SNAPSHOT) {
+        process.stderr.write(`[snapshot] DOM snapshot failed, falling back to accessibility tree: ${(err as Error)?.message?.slice(0, 200)}\n`);
+      }
       return this._basicSnapshot(opts);
     }
   }

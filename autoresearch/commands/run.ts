@@ -3,8 +3,8 @@
  * /autoresearch — Main autonomous iteration loop.
  *
  * Usage:
- *   npx tsx autoresearch/commands/run.ts --preset operate-reliability
- *   npx tsx autoresearch/commands/run.ts --preset operate-reliability --iterations 5
+ *   npx tsx autoresearch/commands/run.ts --preset browser-reliability
+ *   npx tsx autoresearch/commands/run.ts --preset browser-reliability --iterations 5
  *   npx tsx autoresearch/commands/run.ts --goal "..." --scope "src/*.ts" --verify "..." --iterations 10
  *
  * The modify callback spawns Claude Code to make ONE atomic change per iteration.
@@ -64,7 +64,7 @@ async function modify(ctx: ModifyContext, config: AutoResearchConfig): Promise<s
       `claude -p --dangerously-skip-permissions --allowedTools "Bash(npm:*),Bash(npx:*),Bash(git:*),Read,Edit,Write,Glob,Grep" --output-format text --no-session-persistence "${prompt.replace(/"/g, '\\"')}"`,
       {
         cwd: ROOT,
-        timeout: 180_000,
+        timeout: 300_000,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
         env: process.env,
