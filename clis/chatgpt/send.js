@@ -1,52 +1,47 @@
-import { execSync, spawnSync } from 'node:child_process';
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { getErrorMessage } from '@jackwener/opencli/errors';
-import { activateChatGPT, selectModel, MODEL_CHOICES } from './ax.js';
+import { CommandExecutionError } from '@jackwener/opencli/errors';
+import {
+    CHATGPT_DOMAIN,
+    CHATGPT_URL,
+    ensureChatGPTComposer,
+    ensureOnChatGPT,
+    normalizeBooleanFlag,
+    requireNonEmptyPrompt,
+    sendChatGPTMessage,
+    startNewChat,
+} from './utils.js';
+
 export const sendCommand = cli({
     site: 'chatgpt',
     name: 'send',
-    description: 'Send a message to the active ChatGPT Desktop App window',
-    domain: 'localhost',
-    strategy: Strategy.PUBLIC,
-    browser: false,
+    access: 'write',
+    description: 'Send a prompt to ChatGPT web without waiting for the response',
+    domain: CHATGPT_DOMAIN,
+    strategy: Strategy.COOKIE,
+    browser: true,
+    siteSession: 'persistent',
+    navigateBefore: false,
     args: [
-        { name: 'text', required: true, positional: true, help: 'Message to send' },
-        { name: 'model', required: false, help: 'Model/mode to use: auto, instant, thinking, 5.2-instant, 5.2-thinking', choices: MODEL_CHOICES },
+        { name: 'prompt', positional: true, required: true, help: 'Prompt to send' },
+        { name: 'new', type: 'boolean', default: false, help: 'Start a new chat before sending' },
     ],
-    columns: ['Status'],
+    columns: ['Status', 'InjectedText'],
     func: async (page, kwargs) => {
-        const text = kwargs.text;
-        const model = kwargs.model;
-        try {
-            // Switch model before sending if requested
-            if (model) {
-                activateChatGPT();
-                selectModel(model);
-            }
-            // Backup current clipboard content
-            let clipBackup = '';
-            try {
-                clipBackup = execSync('pbpaste', { encoding: 'utf-8' });
-            }
-            catch { /* clipboard may be empty */ }
-            // Copy text to clipboard
-            spawnSync('pbcopy', { input: text });
-            activateChatGPT();
-            const cmd = "osascript " +
-                "-e 'tell application \"System Events\"' " +
-                "-e 'keystroke \"v\" using command down' " +
-                "-e 'delay 0.2' " +
-                "-e 'keystroke return' " +
-                "-e 'end tell'";
-            execSync(cmd);
-            // Restore original clipboard content
-            if (clipBackup) {
-                spawnSync('pbcopy', { input: clipBackup });
-            }
-            return [{ Status: 'Success' }];
+        const prompt = requireNonEmptyPrompt(kwargs.prompt, 'chatgpt send');
+
+        if (normalizeBooleanFlag(kwargs.new)) {
+            await startNewChat(page);
+        } else {
+            await ensureOnChatGPT(page);
         }
-        catch (err) {
-            return [{ Status: "Error: " + getErrorMessage(err) }];
+        // startNewChat / ensureOnChatGPT now wait for the composer selector
+        // after navigating, so the previous standalone 2 s settle is redundant.
+        await ensureChatGPTComposer(page, 'ChatGPT send requires a logged-in ChatGPT session with a visible composer.');
+
+        const sent = await sendChatGPTMessage(page, prompt);
+        if (!sent) {
+            throw new CommandExecutionError('Failed to send message to ChatGPT', `Open ${CHATGPT_URL} and verify the composer is ready.`);
         }
+        return [{ Status: 'Success', InjectedText: prompt }];
     },
 });

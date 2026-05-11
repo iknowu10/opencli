@@ -1,27 +1,25 @@
-import { execSync } from 'node:child_process';
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { ConfigError, getErrorMessage } from '@jackwener/opencli/errors';
+import {
+    CHATGPT_DOMAIN,
+    ensureChatGPTComposer,
+    startNewChat,
+} from './utils.js';
+
 export const newCommand = cli({
     site: 'chatgpt',
     name: 'new',
-    description: 'Open a new chat in ChatGPT Desktop App',
-    domain: 'localhost',
-    strategy: Strategy.PUBLIC,
-    browser: false,
+    access: 'read',
+    description: 'Start a new ChatGPT web conversation',
+    domain: CHATGPT_DOMAIN,
+    strategy: Strategy.COOKIE,
+    browser: true,
+    siteSession: 'persistent',
+    navigateBefore: false,
     args: [],
     columns: ['Status'],
     func: async (page) => {
-        if (process.platform !== 'darwin') {
-            throw new ConfigError('ChatGPT Desktop integration requires macOS (osascript is not available on this platform)');
-        }
-        try {
-            execSync("osascript -e 'tell application \"ChatGPT\" to activate'");
-            execSync("osascript -e 'delay 0.5'");
-            execSync("osascript -e 'tell application \"System Events\" to keystroke \"n\" using command down'");
-            return [{ Status: 'Success' }];
-        }
-        catch (err) {
-            return [{ Status: "Error: " + getErrorMessage(err) }];
-        }
+        await startNewChat(page);
+        await ensureChatGPTComposer(page, 'ChatGPT new requires a logged-in ChatGPT session with a visible composer.');
+        return [{ Status: 'New chat started' }];
     },
 });

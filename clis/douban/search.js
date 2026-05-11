@@ -3,9 +3,11 @@ import { searchDouban } from './utils.js';
 cli({
     site: 'douban',
     name: 'search',
+    access: 'read',
     description: '搜索豆瓣电影、图书或音乐',
     domain: 'search.douban.com',
     strategy: Strategy.COOKIE,
+    navigateBefore: false,
     args: [
         { name: 'type', default: 'movie', choices: ['movie', 'book', 'music'], help: '搜索类型（movie=电影, book=图书, music=音乐）' },
         { name: 'keyword', required: true, positional: true, help: '搜索关键词' },

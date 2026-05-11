@@ -30,11 +30,8 @@ function resolveColumns(rows: Record<string, unknown>[], opts: RenderOptions): s
 export function render(data: unknown, opts: RenderOptions = {}): void {
   let fmt = opts.fmt ?? 'table';
   // Non-TTY auto-downgrade only when format was NOT explicitly passed by user.
-  // Priority: explicit -f (any value) > OUTPUT env var > TTY auto-detect > table
   if (!opts.fmtExplicit) {
-    const envFmt = process.env.OUTPUT?.trim().toLowerCase();
-    if (envFmt) fmt = envFmt;
-    else if (fmt === 'table' && !process.stdout.isTTY) fmt = 'yaml';
+    if (fmt === 'table' && !process.stdout.isTTY) fmt = 'yaml';
   }
   if (data === null || data === undefined) {
     console.log(data);
@@ -75,7 +72,7 @@ function renderTable(data: unknown, opts: RenderOptions): void {
   console.log(table.toString());
   const footer: string[] = [];
   footer.push(`${rows.length} items`);
-  if (opts.elapsed) footer.push(`${opts.elapsed.toFixed(1)}s`);
+  if (opts.elapsed !== undefined) footer.push(`${opts.elapsed.toFixed(1)}s`);
   if (opts.source) footer.push(opts.source);
   if (opts.footerExtra) footer.push(opts.footerExtra);
   console.log(styleText('dim', footer.join(' · ')));

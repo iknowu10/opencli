@@ -18,14 +18,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { cli, Strategy } from '@jackwener/opencli/registry';
-const PUBLISH_URL = 'https://creator.xiaohongshu.com/publish/publish?from=menu_left';
+const PUBLISH_URL = 'https://creator.xiaohongshu.com/publish/publish?from=menu_left&target=image';
 const MAX_IMAGES = 9;
 const MAX_TITLE_LEN = 20;
 const UPLOAD_SETTLE_MS = 3000;
-/** Selectors for the title field, ordered by priority (new UI first). */
+/** Selectors for the title field, ordered by priority across current UI variants. */
 const TITLE_SELECTORS = [
-    // New creator center (2026-03) uses contenteditable for the title field.
-    // Placeholder observed: "填写标题会有更多赞哦"
+    // Some creator-center variants expose the title as contenteditable,
+    // others use a normal <input> with the same placeholder.
     '[contenteditable="true"][placeholder*="标题"]',
     '[contenteditable="true"][placeholder*="赞"]',
     '[contenteditable="true"][class*="title"]',
@@ -95,7 +95,7 @@ async function uploadImages(page, absPaths) {
         catch (err) {
             // If set-file-input action is not supported by extension, fall through to legacy
             const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes('Unknown action') || msg.includes('not supported')) {
+            if (msg.includes('Unknown action') || msg.includes('not supported') || msg.includes('Not allowed')) {
                 // Extension too old — fall through to legacy base64 method
             }
             else {
@@ -180,35 +180,156 @@ async function waitForUploads(page, maxWaitMs = 30_000) {
  * Returns { ok, sel }.
  */
 async function fillField(page, selectors, text, fieldName) {
-    const result = await page.evaluate(`
-    (function(selectors, text) {
+    const located = await page.evaluate(`
+    (function(selectors) {
+      const __opencli_xhs_fill_phase = "locate";
       for (const sel of selectors) {
         const candidates = document.querySelectorAll(sel);
         for (const el of candidates) {
           if (!el || el.offsetParent === null) continue;
-          el.focus();
-          if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-            el.value = '';
-            document.execCommand('selectAll', false);
-            document.execCommand('insertText', false, text);
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          } else {
-            // contenteditable
-            el.textContent = '';
-            document.execCommand('selectAll', false);
-            document.execCommand('insertText', false, text);
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-          return { ok: true, sel };
+          const kind = el.isContentEditable
+            ? 'contenteditable'
+            : (el.tagName === 'TEXTAREA' ? 'textarea' : 'input');
+          return { ok: true, sel, kind };
         }
       }
       return { ok: false };
-    })(${JSON.stringify(selectors)}, ${JSON.stringify(text)})
+    })(${JSON.stringify(selectors)})
   `);
-    if (!result.ok) {
+    if (!located.ok) {
         await page.screenshot({ path: `/tmp/xhs_publish_${fieldName}_debug.png` });
         throw new Error(`Could not find ${fieldName} input. Debug screenshot: /tmp/xhs_publish_${fieldName}_debug.png`);
+    }
+    const applyInPage = () => page.evaluate(`
+      ((selector, expectedText) => {
+        const __opencli_xhs_fill_phase = "apply";
+        const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+        const fireBeforeInput = (el, value) => {
+          try {
+            el.dispatchEvent(new InputEvent('beforeinput', {
+              bubbles: true,
+              data: value,
+              inputType: 'insertText',
+            }));
+          } catch {
+            el.dispatchEvent(new Event('beforeinput', { bubbles: true }));
+          }
+        };
+        const fireInput = (el, value) => {
+          try {
+            el.dispatchEvent(new InputEvent('input', {
+              bubbles: true,
+              data: value,
+              inputType: 'insertText',
+            }));
+          } catch {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        };
+        const el = Array.from(document.querySelectorAll(selector)).find(node => node && node.offsetParent !== null);
+        if (!el) return { ok: false, actual: '' };
+        el.focus();
+        fireBeforeInput(el, expectedText);
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+          const proto = el.tagName === 'TEXTAREA'
+            ? HTMLTextAreaElement.prototype
+            : HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (nativeSetter) nativeSetter.call(el, expectedText);
+          else el.value = expectedText;
+          fireInput(el, expectedText);
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.blur();
+          return { ok: el.value === expectedText, actual: el.value || '' };
+        }
+        el.textContent = '';
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        const inserted = document.execCommand('insertText', false, expectedText);
+        if (!inserted) el.textContent = expectedText;
+        fireInput(el, expectedText);
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.blur();
+        const actual = normalize(el.innerText || el.textContent || '');
+        return { ok: actual === normalize(expectedText), actual };
+      })(${JSON.stringify(located.sel)}, ${JSON.stringify(text)})
+    `);
+    let result;
+    if (located.kind === 'contenteditable' && page.insertText) {
+        const prepared = await page.evaluate(`
+      ((selector, nextText) => {
+        const __opencli_xhs_fill_phase = "prepare";
+        const fireBeforeInput = (el, value) => {
+          try {
+            el.dispatchEvent(new InputEvent('beforeinput', {
+              bubbles: true,
+              data: value,
+              inputType: 'insertText',
+            }));
+          } catch {
+            el.dispatchEvent(new Event('beforeinput', { bubbles: true }));
+          }
+        };
+        const el = Array.from(document.querySelectorAll(selector)).find(node => node && node.offsetParent !== null);
+        if (!el) return { ok: false };
+        el.focus();
+        el.textContent = '';
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        fireBeforeInput(el, nextText);
+        return { ok: true };
+      })(${JSON.stringify(located.sel)}, ${JSON.stringify(text)})
+    `);
+        if (!prepared?.ok) {
+            await page.screenshot({ path: `/tmp/xhs_publish_${fieldName}_debug.png` });
+            throw new Error(`Could not prepare ${fieldName} input. Debug screenshot: /tmp/xhs_publish_${fieldName}_debug.png`);
+        }
+        try {
+            await page.insertText(text);
+            result = await page.evaluate(`
+      ((selector, expectedText) => {
+        const __opencli_xhs_fill_phase = "verify";
+        const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+        const fireInput = (el, value) => {
+          try {
+            el.dispatchEvent(new InputEvent('input', {
+              bubbles: true,
+              data: value,
+              inputType: 'insertText',
+            }));
+          } catch {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        };
+        const el = Array.from(document.querySelectorAll(selector)).find(node => node && node.offsetParent !== null);
+        if (!el) return { ok: false, actual: '' };
+        fireInput(el, expectedText);
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.blur();
+        const actual = normalize(el.innerText || el.textContent || '');
+        return { ok: actual === normalize(expectedText), actual };
+      })(${JSON.stringify(located.sel)}, ${JSON.stringify(text)})
+    `);
+        }
+        catch {
+            result = await applyInPage();
+        }
+    }
+    else {
+        result = await applyInPage();
+    }
+    if (!result?.ok) {
+        await page.screenshot({ path: `/tmp/xhs_publish_${fieldName}_debug.png` });
+        const actual = typeof result?.actual === 'string' ? result.actual : '';
+        throw new Error(`Failed to set ${fieldName}. Expected "${text}", got "${actual}". Debug screenshot: /tmp/xhs_publish_${fieldName}_debug.png`);
     }
 }
 async function selectImageTextTab(page) {
@@ -230,7 +351,20 @@ async function selectImageTextTab(page) {
           if (!isVisible(node)) continue;
           const text = normalize(node.innerText || node.textContent || '');
           if (!text || text.includes('视频')) continue;
-          if (text === target || text.startsWith(target) || text.includes(target)) {
+          if (text === target) {
+            const clickable = node.closest('button, [role="tab"], [role="button"], a, label') || node;
+            clickable.click();
+            return { ok: true, target, text };
+          }
+        }
+      }
+
+      for (const target of targets) {
+        for (const node of nodes) {
+          if (!isVisible(node)) continue;
+          const text = normalize(node.innerText || node.textContent || '');
+          if (!text || text.includes('视频')) continue;
+          if (text.startsWith(target) || text.includes(target)) {
             const clickable = node.closest('button, [role="tab"], [role="button"], a, label') || node;
             clickable.click();
             return { ok: true, target, text };
@@ -329,6 +463,7 @@ async function waitForEditForm(page, maxWaitMs = 10_000) {
 cli({
     site: 'xiaohongshu',
     name: 'publish',
+    access: 'write',
     description: '小红书发布图文笔记 (creator center UI automation)',
     domain: 'creator.xiaohongshu.com',
     strategy: Strategy.COOKIE,
@@ -500,17 +635,17 @@ cli({
         // ── Step 8: Verify success ─────────────────────────────────────────────────
         await page.wait({ time: 4 });
         const finalUrl = await page.evaluate('() => location.href');
+        const successMarkers = isDraft
+            ? ['草稿已保存', '暂存成功', '保存成功', '上传成功']
+            : ['发布成功', '上传成功'];
         const successMsg = await page.evaluate(`
-      () => {
+      (markers => {
         for (const el of document.querySelectorAll('*')) {
           const text = (el.innerText || '').trim();
-          if (
-            el.children.length === 0 &&
-            (text.includes('发布成功') || text.includes('草稿已保存') || text.includes('暂存成功') || text.includes('上传成功'))
-          ) return text;
+          if (el.children.length === 0 && markers.some(marker => text.includes(marker))) return text;
         }
         return '';
-      }
+      })(${JSON.stringify(successMarkers)})
     `);
         const navigatedAway = !finalUrl.includes('/publish/publish');
         const isSuccess = successMsg.length > 0 || navigatedAway;

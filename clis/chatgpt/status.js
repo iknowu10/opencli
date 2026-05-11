@@ -1,25 +1,29 @@
-import { execSync } from 'node:child_process';
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { CommandExecutionError, ConfigError } from '@jackwener/opencli/errors';
+import {
+    CHATGPT_DOMAIN,
+    ensureOnChatGPT,
+    getPageState,
+} from './utils.js';
+
 export const statusCommand = cli({
     site: 'chatgpt',
     name: 'status',
-    description: 'Check if ChatGPT Desktop App is running natively on macOS',
-    domain: 'localhost',
-    strategy: Strategy.PUBLIC,
-    browser: false,
+    access: 'read',
+    description: 'Check ChatGPT web page availability and login state',
+    domain: CHATGPT_DOMAIN,
+    strategy: Strategy.COOKIE,
+    browser: true,
+    siteSession: 'persistent',
+    navigateBefore: false,
     args: [],
-    columns: ['Status'],
+    columns: ['Status', 'Login', 'Url'],
     func: async (page) => {
-        if (process.platform !== 'darwin') {
-            throw new ConfigError('ChatGPT Desktop integration requires macOS (osascript is not available on this platform)');
-        }
-        try {
-            const output = execSync("osascript -e 'application \"ChatGPT\" is running'", { encoding: 'utf-8' }).trim();
-            return [{ Status: output === 'true' ? 'Running' : 'Stopped' }];
-        }
-        catch {
-            throw new CommandExecutionError('Error querying ChatGPT application state');
-        }
+        await ensureOnChatGPT(page);
+        const state = await getPageState(page);
+        return [{
+            Status: state.hasComposer ? 'Connected' : 'Page not ready',
+            Login: state.isLoggedIn && !state.hasLoginGate ? 'Yes' : 'No',
+            Url: state.url,
+        }];
     },
 });
