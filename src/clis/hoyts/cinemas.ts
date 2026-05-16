@@ -3,6 +3,7 @@ import { cli, Strategy } from '../../registry.js';
 cli({
   site: 'hoyts',
   name: 'cinemas',
+  access: 'read',
   description: 'HOYTS cinema locations',
   domain: 'www.hoyts.com.au',
   strategy: Strategy.PUBLIC,
@@ -11,7 +12,7 @@ cli({
     { name: 'state', default: '', help: 'Filter by state (NSW, VIC, QLD, WA, SA, ACT)' },
   ],
   columns: ['name', 'id', 'state', 'suburb', 'features'],
-  func: async (_page, kwargs) => {
+  func: async (kwargs) => {
     const { state } = kwargs;
     const res = await fetch('https://apim.hoyts.com.au/au/cinemaapi/api/cinemas');
     const cinemas: any[] = await res.json();

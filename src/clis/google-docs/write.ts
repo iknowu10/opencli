@@ -5,6 +5,7 @@ import { ensureGoogleSession, googleFetch, parseDocId } from './utils.js';
 cli({
   site: 'google-docs',
   name: 'write',
+  access: 'write',
   description: 'Append text to a Google Doc (requires Chrome login)',
   domain: 'docs.google.com',
   strategy: Strategy.COOKIE,

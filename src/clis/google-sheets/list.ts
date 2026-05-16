@@ -13,6 +13,7 @@ interface DriveFile {
 cli({
   site: 'google-sheets',
   name: 'list',
+  access: 'read',
   description: 'List recent Google Sheets (requires Chrome login)',
   domain: 'docs.google.com',
   strategy: Strategy.COOKIE,

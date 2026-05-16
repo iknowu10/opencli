@@ -5,6 +5,7 @@ import { ensureGoogleSession, parseSheetId } from './utils.js';
 cli({
   site: 'google-sheets',
   name: 'append',
+  access: 'write',
   description: 'Append a row to a Google Sheet (requires Chrome login)',
   domain: 'docs.google.com',
   strategy: Strategy.COOKIE,

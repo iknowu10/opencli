@@ -10,6 +10,7 @@ const SEVERITY_MAP = { 1: 'LOW', 2: 'MODERATE', 3: 'ELEVATED', 4: 'HIGH', 5: 'CR
 cli({
   site: 'world-monitor',
   name: 'wire',
+  access: 'read',
   description: 'Real-time global conflict & incident feed from World Monitor',
   domain: 'world-monitor.com',
   strategy: Strategy.PUBLIC,

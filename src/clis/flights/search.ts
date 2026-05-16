@@ -18,11 +18,11 @@ const SOURCES: Record<string, FlightSource> = {
 cli({
   site: 'flights',
   name: 'search',
+  access: 'read',
   description: '机票查询',
   domain: 'flights.ctrip.com',
   strategy: Strategy.COOKIE,
   navigateBefore: false,
-  timeoutSeconds: 90,
   args: [
     { name: 'from', required: true, positional: true, help: '出发城市 (如: 上海 / SHA)' },
     { name: 'to', required: true, positional: true, help: '到达城市 (如: 北京 / BJS)' },

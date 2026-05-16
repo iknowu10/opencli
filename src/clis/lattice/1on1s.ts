@@ -4,6 +4,7 @@ import { latticeNavigate, latticeEval, latticePrevMeeting } from '../../lattice.
 cli({
   site: 'lattice',
   name: '1on1s',
+  access: 'read',
   description: 'View items written in your 1:1 meetings from Lattice',
   domain: 'latticehq.com',
   strategy: Strategy.UI,

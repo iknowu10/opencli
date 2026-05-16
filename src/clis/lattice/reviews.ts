@@ -4,6 +4,7 @@ import { latticeNavigate, latticeEval } from '../../lattice.js';
 cli({
   site: 'lattice',
   name: 'reviews',
+  access: 'read',
   description: 'List performance review packets from Lattice',
   domain: 'latticehq.com',
   strategy: Strategy.UI,

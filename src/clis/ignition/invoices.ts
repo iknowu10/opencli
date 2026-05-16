@@ -12,6 +12,7 @@ const STATE_MAP: Record<string, string> = {
 cli({
   site: 'ignition',
   name: 'invoices',
+  access: 'read',
   description: 'List Ignition client invoices',
   domain: 'go.ignitionapp.com',
   strategy: Strategy.INTERCEPT,

@@ -5,6 +5,7 @@ import { ensureGoogleSession, googleFetch, parseSheetId } from './utils.js';
 cli({
   site: 'google-sheets',
   name: 'write',
+  access: 'write',
   description: 'Write values to Google Sheet cells (requires Chrome login)',
   domain: 'docs.google.com',
   strategy: Strategy.COOKIE,

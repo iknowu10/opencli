@@ -4,6 +4,7 @@ import { pbFetch } from './utils.js';
 cli({
   site: 'productboard',
   name: 'releases',
+  access: 'read',
   description: 'List releases from Productboard',
   domain: 'ignitionapp.productboard.com',
   strategy: Strategy.COOKIE,

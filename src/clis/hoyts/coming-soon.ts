@@ -3,6 +3,7 @@ import { cli, Strategy } from '../../registry.js';
 cli({
   site: 'hoyts',
   name: 'coming-soon',
+  access: 'read',
   description: 'HOYTS coming soon movies',
   domain: 'www.hoyts.com.au',
   strategy: Strategy.PUBLIC,
@@ -11,7 +12,7 @@ cli({
     { name: 'limit', type: 'int', default: 20, help: 'Number of movies' },
   ],
   columns: ['title', 'rating', 'runtime', 'genres', 'release'],
-  func: async (_page, kwargs) => {
+  func: async (kwargs) => {
     const { limit } = kwargs;
     const res = await fetch('https://apim.hoyts.com.au/au/cinemaapi/api/movies');
     const movies: any[] = await res.json();

@@ -4,6 +4,7 @@ import { latticeNavigate, latticeEval } from '../../lattice.js';
 cli({
   site: 'lattice',
   name: 'goals',
+  access: 'read',
   description: 'List your goals/OKRs from Lattice',
   domain: 'latticehq.com',
   strategy: Strategy.UI,

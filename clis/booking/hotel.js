@@ -23,6 +23,7 @@ function dayAfter(dateStr) {
 cli({
   site: 'booking',
   name: 'hotel',
+  access: 'read',
   description: '酒店搜索（Booking.com，含价格，全球覆盖）',
   domain: 'www.booking.com',
   strategy: Strategy.COOKIE,

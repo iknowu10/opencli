@@ -13,6 +13,7 @@ interface DriveFile {
 cli({
   site: 'google-docs',
   name: 'search',
+  access: 'read',
   description: 'Search Google Docs by keyword (requires Chrome login)',
   domain: 'docs.google.com',
   strategy: Strategy.COOKIE,

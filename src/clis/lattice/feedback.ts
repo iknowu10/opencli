@@ -4,6 +4,7 @@ import { latticeNavigate, latticeEval } from '../../lattice.js';
 cli({
   site: 'lattice',
   name: 'feedback',
+  access: 'read',
   description: 'View feedback you have received in Lattice',
   domain: 'latticehq.com',
   strategy: Strategy.UI,

@@ -5,6 +5,7 @@ import { ensureGoogleSession, googleFetch, parseDocId } from './utils.js';
 cli({
   site: 'google-docs',
   name: 'read',
+  access: 'read',
   description: 'Read a Google Doc as plain text (requires Chrome login)',
   domain: 'docs.google.com',
   strategy: Strategy.COOKIE,

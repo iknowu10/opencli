@@ -3,6 +3,7 @@ import { cli, Strategy } from '../../registry.js';
 cli({
   site: 'hoyts',
   name: 'sessions',
+  access: 'read',
   description: 'HOYTS session times for a cinema',
   domain: 'www.hoyts.com.au',
   strategy: Strategy.PUBLIC,
@@ -13,7 +14,7 @@ cli({
     { name: 'movie', default: '', help: 'Filter by movie name (partial match)' },
   ],
   columns: ['time', 'movie', 'type', 'screen', 'format'],
-  func: async (_page, kwargs) => {
+  func: async (kwargs) => {
     const { cinema, date: dateArg, movie: movieFilter } = kwargs;
     const date = dateArg || new Date().toISOString().slice(0, 10);
 

@@ -3,6 +3,7 @@ import { cli, Strategy } from '../../registry.js';
 cli({
   site: 'ignition',
   name: 'disbursals',
+  access: 'read',
   description: 'List Ignition payment disbursals',
   domain: 'go.ignitionapp.com',
   strategy: Strategy.COOKIE,

@@ -3,6 +3,7 @@ import { cli, Strategy } from '../../registry.js';
 cli({
   site: 'ignition',
   name: 'plans',
+  access: 'read',
   description: 'Plans from ignition',
   domain: 'go.ignitionapp.com',
   strategy: Strategy.COOKIE,

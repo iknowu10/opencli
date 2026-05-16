@@ -5,6 +5,7 @@ import { ensureGoogleSession, googleFetch, parseSheetId, parseCsv } from './util
 cli({
   site: 'google-sheets',
   name: 'read',
+  access: 'read',
   description: 'Read Google Sheet data as table (requires Chrome login)',
   domain: 'docs.google.com',
   strategy: Strategy.COOKIE,
