@@ -1,94 +1,136 @@
 /**
- * 携程机票搜索 — 通过浏览器提取航班数据，支持国内和国际。
+ * 携程机票 oneway search — domestic + international flight search by route + date.
  *
- * Usage:
- *   opencli ctrip flight 上海 北京
- *   opencli ctrip flight MEL 厦门 --date 2026-05-20
- *   opencli ctrip flight 上海 东京 --date 2026-05-20 --return 2026-05-27
+ * Unlike `hotel-search`, the flight rows are NOT in `__NEXT_DATA__` — they
+ * arrive via a post-load XHR that the daemon network buffer currently can't
+ * capture (see MEMORY `daemon_capture_pipeline_bug_2026_05_07`). We instead
+ * extract from the rendered `.flight-list > span > div` cards using a
+ * position-anchored innerText parser (see `buildFlightExtractJs` in utils).
+ *
+ * Round-trip + advanced filters (airline whitelist, cabin selection beyond
+ * 全舱位) are out of scope for v1 — track in #1481 follow-up if requested.
  */
+import { ArgumentError, AuthRequiredError, CommandExecutionError, EmptyResultError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { toFlightCode, tomorrow } from './common.js';
+import { buildFlightExtractJs, buildScrollUntilJs, parseIataCode, parseIsoDate } from './utils.js';
+
+const MIN_LIMIT = 1;
+const MAX_LIMIT = 50;
+const DEFAULT_LIMIT = 20;
+
+function parseFlightLimit(raw) {
+    if (raw === undefined || raw === null || raw === '') return DEFAULT_LIMIT;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+        throw new ArgumentError(`--limit must be an integer between ${MIN_LIMIT} and ${MAX_LIMIT}, got ${JSON.stringify(raw)}`);
+    }
+    if (parsed < MIN_LIMIT || parsed > MAX_LIMIT) {
+        throw new ArgumentError(`--limit must be between ${MIN_LIMIT} and ${MAX_LIMIT}, got ${parsed}`);
+    }
+    return parsed;
+}
+
+/**
+ * Wait for `.flight-list > span > div` to render (the post-load XHR settles
+ * 1-3s after navigation), or detect a captcha/login redirect.
+ */
+const WAIT_FOR_FLIGHTS_JS = `
+  new Promise((resolve) => {
+    const detect = () => {
+      if (location.pathname.includes('captcha') || /验证码|verify the human/i.test(document.body?.innerText || '')) return 'captcha';
+      if (document.querySelector('.flight-list > span > div')) return 'content';
+      return null;
+    };
+    const found = detect();
+    if (found) return resolve(found);
+    const observer = new MutationObserver(() => {
+      const result = detect();
+      if (result) { observer.disconnect(); resolve(result); }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    setTimeout(() => { observer.disconnect(); resolve('timeout'); }, 8000);
+  })
+`;
 
 cli({
-  site: 'ctrip',
-  name: 'flight',
-  description: '机票搜索（携程，国内+国际）',
-  domain: 'flights.ctrip.com',
-  strategy: Strategy.COOKIE,
-  navigateBefore: false,
-  timeoutSeconds: 90,
-  args: [
-    { name: 'from', required: true, positional: true, help: '出发城市 (如: 上海 / SHA)' },
-    { name: 'to', required: true, positional: true, help: '到达城市 (如: 北京 / BJS)' },
-    { name: 'date', help: '出发日期 YYYY-MM-DD (默认明天)' },
-    { name: 'return', help: '返程日期 YYYY-MM-DD (不填查单程)' },
-    { name: 'limit', type: 'int', default: 15, help: '显示条数' },
-  ],
-  columns: ['rank', 'leg', 'airline', 'flightNo', 'depart', 'arrive', 'stops', 'price'],
-  func: async (page, kwargs) => {
-    const from = toFlightCode(kwargs.from);
-    const to = toFlightCode(kwargs.to);
-    const date = kwargs.date || tomorrow();
-    const rdate = kwargs.return;
-    const limit = kwargs.limit || 15;
-
-    const legs = [
-      { from, to, label: '去程', date },
-      ...(rdate ? [{ from: to, to: from, label: '返程', date: rdate }] : []),
-    ];
-    const isRoundTrip = legs.length > 1;
-    const allResults = [];
-
-    for (const leg of legs) {
-      const url = `https://flights.ctrip.com/online/list/oneway-${leg.from}-${leg.to}?depdate=${leg.date}`;
-      await page.goto(url);
-      await page.wait(12);
-      try { await page.autoScroll({ times: 3, delayMs: 1000 }); } catch(e) { /* ignore */ }
-      await page.wait(3);
-
-      const raw = await page.evaluate(`
-        (() => {
-          const results = [];
-          const cards = document.querySelectorAll('.flight-item');
-          if (cards.length === 0) return [];
-          for (const card of cards) {
-            const text = card.innerText || '';
-            const lines = text.split(String.fromCharCode(10)).map(s => s.trim()).filter(Boolean);
-            if (lines.length < 3) continue;
-            const airline = lines[0] || '';
-            const fnRe = new RegExp('[A-Z][A-Z0-9]' + String.fromCharCode(92) + 'd{3,4}', 'g');
-            const fnMatch = text.match(fnRe) || [];
-            const flightNo = fnMatch.join('/');
-            const times = [];
-            const tr = new RegExp(String.fromCharCode(92) + 'd{2}:' + String.fromCharCode(92) + 'd{2}', 'g');
-            let m;
-            while ((m = tr.exec(text)) !== null) times.push(m[0]);
-            const depart = times[0] || '';
-            let arrive = times[1] || '';
-            if (text.includes('+1')) arrive += '+1';
-            const prices = [];
-            const pr = /[¥￥](\\d[\\d,]*)/g;
-            while ((m = pr.exec(text)) !== null) prices.push(Number(m[1].replace(/,/g, '')));
-            const price = prices.length ? Math.min(...prices) : '';
-            const stops = fnMatch.length > 1 ? (fnMatch.length - 1) + '转' : '直飞';
-            if (depart || price) {
-              results.push({ airline, flightNo, depart, arrive, stops, price });
-            }
-          }
-          return results;
-        })()
-      `);
-
-      if (Array.isArray(raw)) {
-        for (const f of raw) {
-          allResults.push({
-            leg: isRoundTrip ? `${leg.label} ${leg.date}` : '',
-            ...f,
-          });
+    site: 'ctrip',
+    name: 'flight',
+    access: 'read',
+    description: '搜索携程一程机票（按出发/到达 IATA 三字码 + 日期）',
+    domain: 'flights.ctrip.com',
+    strategy: Strategy.COOKIE,
+    browser: true,
+    navigateBefore: false,
+    args: [
+        { name: 'from', required: true, positional: true, help: 'Departure IATA code (e.g. BJS / PEK)' },
+        { name: 'to', required: true, positional: true, help: 'Arrival IATA code (e.g. SHA / PVG)' },
+        { name: 'date', required: true, help: 'Departure date (YYYY-MM-DD)' },
+        { name: 'limit', type: 'int', default: DEFAULT_LIMIT, help: `Number of flights (${MIN_LIMIT}-${MAX_LIMIT})` },
+    ],
+    columns: [
+        'rank',
+        'airline', 'flightNo', 'aircraft',
+        'departureTime', 'departureAirport',
+        'arrivalTime', 'arrivalAirport', 'terminal',
+        'price', 'currency', 'cabin',
+        'url',
+    ],
+    func: async (page, kwargs) => {
+        const fromCode = parseIataCode('from', kwargs.from);
+        const toCode = parseIataCode('to', kwargs.to);
+        if (fromCode === toCode) {
+            throw new ArgumentError(`--from and --to must differ (got ${fromCode})`);
         }
-      }
-    }
+        const date = parseIsoDate('date', kwargs.date);
+        const limit = parseFlightLimit(kwargs.limit);
 
-    return allResults.slice(0, limit).map((f, i) => ({ rank: i + 1, ...f }));
-  },
+        const searchUrl =
+            `https://flights.ctrip.com/online/list/oneway-${fromCode.toLowerCase()}-${toCode.toLowerCase()}` +
+            `?depdate=${date}&cabin=Y_S_C_F&adult=1&child=0&infant=0`;
+        await page.goto(searchUrl);
+        const waitResult = await page.evaluate(WAIT_FOR_FLIGHTS_JS);
+        if (waitResult === 'captcha') {
+            throw new AuthRequiredError('flights.ctrip.com', 'Ctrip is asking for a captcha; complete it in your browser session and retry');
+        }
+        if (waitResult !== 'content') {
+            throw new CommandExecutionError(`Ctrip flight page did not render flight cards (state=${String(waitResult)})`);
+        }
+        // Scroll until enough flight cards rendered (Ctrip lazy-loads beyond ~8).
+        const renderedCardCount = await page.evaluate(buildScrollUntilJs('.flight-list > span > div', limit));
+        const raw = await page.evaluate(buildFlightExtractJs());
+        if (!Array.isArray(raw)) {
+            throw new CommandExecutionError('Ctrip flight DOM extraction returned malformed rows');
+        }
+        const rows = raw;
+        if (rows.length === 0) {
+            if (Number(renderedCardCount) > 0) {
+                throw new CommandExecutionError('Ctrip flight cards rendered but parser did not find required flight anchors');
+            }
+            throw new EmptyResultError('ctrip flight', `No flights for ${fromCode}→${toCode} on ${date}`);
+        }
+        const completeRows = rows
+            .filter((r) => r.departureTime && r.departureAirport && r.arrivalTime && r.arrivalAirport && r.airline && r.flightNo)
+            .slice(0, limit)
+            .map((r, i) => ({
+                rank: i + 1,
+                airline: r.airline,
+                flightNo: r.flightNo,
+                aircraft: r.aircraft,
+                departureTime: r.departureTime,
+                departureAirport: r.departureAirport,
+                arrivalTime: r.arrivalTime,
+                arrivalAirport: r.arrivalAirport,
+                terminal: r.terminal,
+                price: r.price,
+                currency: r.currency,
+                cabin: r.cabin,
+                url: searchUrl,
+            }));
+        if (completeRows.length === 0) {
+            throw new CommandExecutionError('Ctrip flight rows were missing required airline/flight/time/airport anchors');
+        }
+        return completeRows;
+    },
 });
+
+export const __test__ = { parseFlightLimit, WAIT_FOR_FLIGHTS_JS };

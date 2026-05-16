@@ -20,6 +20,9 @@ const COMPOSER_SELECTORS = [
     '[contenteditable="true"][role="textbox"]',
 ];
 const SEND_BUTTON_SELECTOR = 'button[data-testid="send-button"]:not([disabled])';
+const SEND_BUTTON_FALLBACK_SELECTORS = [
+    '#composer-submit-button:not([disabled])',
+];
 const SEND_BUTTON_LABELS = [
     'Send prompt',
     'Send message',
@@ -100,6 +103,50 @@ export function requirePositiveInt(value, flagLabel, hint) {
     return value;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// page.evaluate envelope helpers.
+//
+// The browser bridge wraps every `page.evaluate(...)` return value in a
+// `{ session, data }` envelope. Adapters that read `.length` or
+// `Array.isArray(payload)` directly on the envelope silently see "no data" —
+// this matches the failure mode fixed for xiaohongshu/rednote (#1561) and
+// weibo (#1568).
+//
+// `unwrapEvaluateResult` is a defensive ternary: it unwraps when the payload
+// looks like an envelope, otherwise passes the value through unchanged so
+// older bridge versions and primitive return values still work.
+// ─────────────────────────────────────────────────────────────────────────────
+export function unwrapEvaluateResult(payload) {
+    if (payload && !Array.isArray(payload) && typeof payload === 'object' && 'session' in payload && 'data' in payload) {
+        return payload.data;
+    }
+    return payload;
+}
+
+export function requireArrayEvaluateResult(payload, label) {
+    if (!Array.isArray(payload)) {
+        if (payload && typeof payload === 'object' && 'error' in payload) {
+            throw new CommandExecutionError(`${label}: ${String(payload.error)}`);
+        }
+        throw new CommandExecutionError(`${label} returned malformed extraction payload`);
+    }
+    return payload;
+}
+
+export function requireObjectEvaluateResult(payload, label) {
+    if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
+        throw new CommandExecutionError(`${label} returned malformed extraction payload`);
+    }
+    return payload;
+}
+
+export function requireBooleanEvaluateResult(payload, label) {
+    if (typeof payload !== 'boolean') {
+        throw new CommandExecutionError(`${label} returned malformed extraction payload`);
+    }
+    return payload;
+}
+
 export function parseChatGPTConversationId(value) {
     const raw = String(value ?? '').trim();
     const match = raw.match(/(?:^|\/c\/)([A-Za-z0-9_-]{8,})(?:[/?#]|$)/);
@@ -112,7 +159,7 @@ export function parseChatGPTConversationId(value) {
 }
 
 export async function currentChatGPTUrl(page) {
-    const url = await page.evaluate('window.location.href').catch(() => '');
+    const url = unwrapEvaluateResult(await page.evaluate('window.location.href').catch(() => ''));
     return typeof url === 'string' ? url : '';
 }
 
@@ -158,7 +205,7 @@ export async function startNewChat(page) {
 }
 
 export async function getPageState(page) {
-    return await page.evaluate(`(() => {
+    return requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const isVisible = (el) => {
             if (!(el instanceof HTMLElement)) return false;
             const style = window.getComputedStyle(el);
@@ -184,7 +231,7 @@ export async function getPageState(page) {
             isLoggedIn: hasComposer || !!userMenu || !hasLoginGate,
             hasLoginGate,
         };
-    })()`);
+    })()`)), 'chatgpt page state');
 }
 
 export async function ensureChatGPTLogin(page, message = 'ChatGPT requires a logged-in browser session.') {
@@ -201,6 +248,40 @@ export async function ensureChatGPTComposer(page, message = 'ChatGPT composer is
         throw new CommandExecutionError(message);
     }
     return state;
+}
+
+export async function clearChatGPTDraft(page) {
+    await page.evaluate(`
+        (() => {
+            const removeLabels = [/^remove file/i, /^移除文件/];
+            for (let pass = 0; pass < 10; pass += 1) {
+                const button = Array.from(document.querySelectorAll('button')).find((node) => {
+                    const label = node.getAttribute('aria-label') || '';
+                    return removeLabels.some((pattern) => pattern.test(label));
+                });
+                if (!button) break;
+                button.click();
+            }
+
+            const selectors = ${JSON.stringify(COMPOSER_SELECTORS)};
+            for (const selector of selectors) {
+                for (const node of document.querySelectorAll(selector)) {
+                    if (!(node instanceof HTMLElement)) continue;
+                    if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+                        node.value = '';
+                    } else if (node.isContentEditable) {
+                        node.textContent = '';
+                        node.innerHTML = '<p><br></p>';
+                    } else {
+                        node.textContent = '';
+                    }
+                    node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+                    node.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+        })()
+    `);
+    await page.wait(0.5);
 }
 
 /**
@@ -221,17 +302,26 @@ export async function sendChatGPTMessage(page, text) {
     // findComposer() retries inside a single CDP call, so no fixed sleep is
     // needed before reading the composer.
 
-    const typeResult = await page.evaluate(`
+    const typeResult = requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (() => {
             ${buildComposerLocatorScript()}
             const composer = findComposer();
             if (!composer) return false;
             composer.focus();
-            composer.textContent = '';
+            if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+                composer.value = '';
+            } else if (composer.isContentEditable) {
+                composer.textContent = '';
+                composer.innerHTML = '<p><br></p>';
+            } else {
+                composer.textContent = '';
+            }
+            composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+            composer.dispatchEvent(new Event('change', { bubbles: true }));
             return true;
         })()
-    `);
-    
+    `)), 'chatgpt composer readiness');
+
     if (!typeResult) return false;
     
     // Use page.type() which is Playwright's native method
@@ -255,27 +345,35 @@ export async function sendChatGPTMessage(page, text) {
         `);
     }
     
-    // Wait for send button to appear (it only shows when there's text)
-    await page.wait(1.5);
+    let sent = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        await page.wait(0.5);
+        sent = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
+            (() => {
+                const isUsable = (button) => button
+                    && !button.disabled
+                    && button.getAttribute('aria-disabled') !== 'true';
+                const primary = document.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)})
+                    || ${JSON.stringify(SEND_BUTTON_FALLBACK_SELECTORS)}.map(selector => document.querySelector(selector)).find(Boolean);
+                const btns = Array.from(document.querySelectorAll('button'));
+                const labels = ${JSON.stringify(SEND_BUTTON_LABELS)};
+                const sendBtn = isUsable(primary)
+                    ? primary
+                    : btns.find(b => labels.includes(b.getAttribute('aria-label') || '') && isUsable(b));
+                return { sendBtnFound: !!sendBtn };
+            })()
+        `)), 'chatgpt send button readiness');
+        if (sent?.sendBtnFound) break;
+    }
 
-    // Click send button
-    const sent = await page.evaluate(`
-        (() => {
-            const primary = document.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)});
-            const btns = Array.from(document.querySelectorAll('button'));
-            const labels = ${JSON.stringify(SEND_BUTTON_LABELS)};
-            const sendBtn = primary || btns.find(b => labels.includes(b.getAttribute('aria-label') || '') && !b.disabled);
-            return { sendBtnFound: !!sendBtn };
-        })()
-    `);
-    
-    if (!sent || !sent.sendBtnFound) {
+    if (!sent?.sendBtnFound) {
         return false;
     }
     
     await page.evaluate(`
         (() => {
-            const primary = document.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)});
+            const primary = document.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)})
+                || ${JSON.stringify(SEND_BUTTON_FALLBACK_SELECTORS)}.map(selector => document.querySelector(selector)).find(Boolean);
             const labels = ${JSON.stringify(SEND_BUTTON_LABELS)};
             const sendBtn = primary || Array.from(document.querySelectorAll('button')).find(b => labels.includes(b.getAttribute('aria-label') || '') && !b.disabled);
             if (sendBtn) sendBtn.click();
@@ -285,7 +383,7 @@ export async function sendChatGPTMessage(page, text) {
 }
 
 export async function getVisibleMessages(page) {
-    const result = await page.evaluate(`(() => {
+    const result = requireArrayEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const isVisible = (el) => {
             if (!(el instanceof HTMLElement)) return false;
             const style = window.getComputedStyle(el);
@@ -331,8 +429,7 @@ export async function getVisibleMessages(page) {
             rows.push({ role, text, html });
         }
         return rows;
-    })()`);
-    if (!Array.isArray(result)) return [];
+    })()`)), 'chatgpt visible messages');
     return result.map((item, index) => ({
         Index: index + 1,
         Role: item?.role === 'Assistant' ? 'Assistant' : 'User',
@@ -394,7 +491,7 @@ export async function getConversationList(page) {
     // so the previous standalone 2 s settle is redundant.
     await ensureOnChatGPT(page);
 
-    const openSidebar = await page.evaluate(`(() => {
+    const openSidebar = requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const button = Array.from(document.querySelectorAll('button'))
             .find((node) => /open sidebar/i.test(node.getAttribute('aria-label') || ''));
         if (button instanceof HTMLElement) {
@@ -402,7 +499,7 @@ export async function getConversationList(page) {
             return true;
         }
         return false;
-    })()`);
+    })()`)), 'chatgpt sidebar open state');
     if (openSidebar) {
         try {
             await page.wait({ selector: CONVERSATION_LINK_SELECTOR, timeout: 3 });
@@ -426,7 +523,7 @@ export async function getConversationList(page) {
 }
 
 async function extractConversationLinks(page) {
-    const items = await page.evaluate(`(() => {
+    const items = requireArrayEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const isVisible = (el) => {
             if (!(el instanceof HTMLElement)) return false;
             const style = window.getComputedStyle(el);
@@ -451,36 +548,170 @@ async function extractConversationLinks(page) {
             });
         }
         return rows;
-    })()`);
-    return Array.isArray(items)
-        ? items.map((item, index) => ({
+    })()`)), 'chatgpt conversation link extraction');
+    return items.map((item, index) => ({
             Index: index + 1,
             Id: String(item?.Id || ''),
             Title: String(item?.Title || '(untitled)').trim() || '(untitled)',
             Url: String(item?.Url || ''),
-        })).filter((item) => item.Id)
-        : [];
+        })).filter((item) => item.Id);
+}
+
+function imageMimeFromPath(filePath) {
+    const lower = String(filePath || '').toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    if (lower.endsWith('.heif')) return 'image/heif';
+    return 'image/jpeg';
+}
+
+export async function prepareChatGPTImagePaths(imagePaths) {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const absPaths = imagePaths.map(filePath => path.default.resolve(filePath));
+    const allowedExts = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif']);
+
+    for (const absPath of absPaths) {
+        if (!fs.default.existsSync(absPath)) {
+            return { ok: false, reason: `Image not found: ${absPath}` };
+        }
+        const stat = fs.default.statSync(absPath);
+        if (!stat.isFile()) {
+            return { ok: false, reason: `Not a file: ${absPath}` };
+        }
+        if (stat.size > 25 * 1024 * 1024) {
+            return { ok: false, reason: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: 25 MB` };
+        }
+        const ext = path.default.extname(absPath).toLowerCase();
+        if (!allowedExts.has(ext)) {
+            return { ok: false, reason: `Unsupported image type: ${absPath}` };
+        }
+    }
+
+    return { ok: true, paths: absPaths };
+}
+
+async function waitForChatGPTUploadPreview(page, fileNames) {
+    const namesJson = JSON.stringify(fileNames);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        await page.wait(1);
+        const ready = requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
+            (() => {
+                const names = ${namesJson};
+                const text = document.body ? (document.body.innerText || '') : '';
+                const matchedNames = names.filter(name => text.includes(name)).length;
+                if (matchedNames >= names.length) return true;
+
+                const composer = document.querySelector('[aria-label="Chat with ChatGPT"], [placeholder="Ask anything"], #prompt-textarea');
+                let root = composer;
+                for (let i = 0; i < 6 && root && root.parentElement; i += 1) root = root.parentElement;
+                const scope = root || document.body;
+                if (!scope) return false;
+
+                const previewNodes = scope.querySelectorAll('img[src], canvas, video, [style*="background-image"], [data-testid*="attachment"], [data-testid*="upload"], [class*="attachment"], [class*="upload"]');
+                return previewNodes.length >= names.length;
+            })()
+        `)), 'chatgpt upload preview detection');
+        if (ready) return true;
+    }
+    return false;
+}
+
+export async function uploadChatGPTImages(page, imagePaths) {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const prepared = await prepareChatGPTImagePaths(imagePaths);
+    if (!prepared.ok) return prepared;
+    const absPaths = prepared.paths;
+
+    const fileNames = absPaths.map(filePath => path.default.basename(filePath));
+
+    let uploaded = false;
+    if (page.setFileInput) {
+        try {
+            await page.setFileInput(absPaths, 'input[type="file"]');
+            uploaded = true;
+        } catch (err) {
+            const msg = String(err?.message || err);
+            if (!msg.includes('Unknown action') && !msg.includes('not supported') && !msg.includes('Not allowed') && !msg.includes('No element found')) {
+                throw err;
+            }
+        }
+    }
+
+    if (!uploaded) {
+        const files = absPaths.map(absPath => ({
+            name: path.default.basename(absPath),
+            mime: imageMimeFromPath(absPath),
+            base64: fs.default.readFileSync(absPath).toString('base64'),
+        }));
+        const fallbackResult = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
+            (() => {
+                const files = ${JSON.stringify(files)};
+                const input = document.querySelector('input[type="file"]');
+                if (!(input instanceof HTMLInputElement)) {
+                    return { ok: false, reason: 'file input not found' };
+                }
+
+                const dt = new DataTransfer();
+                for (const item of files) {
+                    const binary = atob(item.base64);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                    dt.items.add(new File([bytes], item.name, { type: item.mime }));
+                }
+                input.files = dt.files;
+
+                const propsKey = Object.keys(input).find(key => key.startsWith('__reactProps$'));
+                if (propsKey && input[propsKey] && typeof input[propsKey].onChange === 'function') {
+                    const nativeEvent = new Event('change', { bubbles: true });
+                    input[propsKey].onChange({
+                        target: input,
+                        currentTarget: input,
+                        nativeEvent,
+                        preventDefault() {},
+                        stopPropagation() {},
+                        isDefaultPrevented() { return false; },
+                        isPropagationStopped() { return false; },
+                        persist() {},
+                    });
+                } else {
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                return { ok: true };
+            })()
+        `)), 'chatgpt image upload fallback');
+        if (fallbackResult && !fallbackResult.ok) return fallbackResult;
+    }
+
+    const ready = await waitForChatGPTUploadPreview(page, fileNames);
+    if (!ready) return { ok: false, reason: 'image upload preview did not appear' };
+
+    return { ok: true, files: absPaths };
 }
 
 /**
  * Check if ChatGPT is still generating a response.
  */
 export async function isGenerating(page) {
-    return await page.evaluate(`
+    return requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (() => {
             return Array.from(document.querySelectorAll('button')).some(b => {
                 const label = b.getAttribute('aria-label') || '';
                 return label === 'Stop generating' || label.includes('Thinking');
             });
         })()
-    `);
+    `)), 'chatgpt generation state');
 }
 
 /**
  * Get visible image URLs from the ChatGPT page (excluding profile/avatar images).
  */
 export async function getChatGPTVisibleImageUrls(page) {
-    return await page.evaluate(`
+    return requireArrayEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (() => {
             const isVisible = (el) => {
                 if (!(el instanceof HTMLElement)) return false;
@@ -515,7 +746,7 @@ export async function getChatGPTVisibleImageUrls(page) {
             }
             return urls;
         })()
-    `);
+    `)), 'chatgpt visible image url extraction');
 }
 
 /**
@@ -533,7 +764,7 @@ export async function waitForChatGPTImages(page, beforeUrls, timeoutSeconds, con
 
         let currentUrl = '';
         if (convUrl && convUrl.includes('/c/')) {
-            currentUrl = await page.evaluate('window.location.href').catch(() => '');
+            currentUrl = unwrapEvaluateResult(await page.evaluate('window.location.href').catch(() => ''));
             if (currentUrl && !isSameChatGPTConversation(currentUrl, convUrl)) {
                 await page.goto(convUrl);
                 await page.wait(3);
@@ -573,10 +804,12 @@ export async function waitForChatGPTImages(page, beforeUrls, timeoutSeconds, con
 export const __test__ = {
     COMPOSER_SELECTORS,
     SEND_BUTTON_SELECTOR,
+    SEND_BUTTON_FALLBACK_SELECTORS,
     SEND_BUTTON_LABELS,
     CLOSE_SIDEBAR_LABELS,
     isSameChatGPTConversation,
     parseChatGPTConversationId,
+    imageMimeFromPath,
 };
 
 /**
@@ -584,7 +817,7 @@ export const __test__ = {
  */
 export async function getChatGPTImageAssets(page, urls) {
     const urlsJson = JSON.stringify(urls);
-    return await page.evaluate(`
+    return requireArrayEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (async (targetUrls) => {
             const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -658,5 +891,5 @@ export async function getChatGPTImageAssets(page, urls) {
 
             return results;
         })(${urlsJson})
-    `, urls);
+    `)), 'chatgpt image asset export');
 }
